@@ -1,5 +1,5 @@
 import { Want } from '@kit.AbilityKit';
-import { vpnExtension, VpnExtensionAbility } from '@kit.NetworkKit';
+import { connection, vpnExtension, VpnExtensionAbility } from '@kit.NetworkKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -14,6 +14,7 @@ import {
 } from '../services/TaildropNotificationService';
 import { ControlServerConfig, ControlServerSettings } from '../services/ControlServerConfig';
 import { DeviceNameService } from '../services/DeviceNameService';
+import { VpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
 
 const DOMAIN = 0x0000;
 const TAG = 'TailscaleVpn';
@@ -58,6 +59,8 @@ const VPN_CONNECT_CONFIG_TTL_MS: number = 15000;
 const VPN_BACKEND_STATUS_POLL_INTERVAL_MS: number = 100;
 const VPN_BACKEND_STATUS_MAX_ATTEMPTS: number = 150;
 const FILE_WATCH_CLOSE_WRITE: number = 0x8;
+const NETWORK_REBIND_DEBOUNCE_MS: number = 750;
+const NETWORK_REBIND_MIN_INTERVAL_MS: number = 3000;
 
 interface PeerSummary {
   key: string;
@@ -99,6 +102,7 @@ interface VpnStopResponse {
 interface VpnConnectConfigHandoff {
   createdAtMs: number;
   config: string;
+  backendHandoffComplete?: boolean;
 }
 
 interface VpnBackendHandoffRequest {
@@ -267,6 +271,24 @@ function emptyTaildropTransfer(): TaildropTransferSummary {
 }
 
 export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
+  private readonly vpnBackgroundTask: VpnBackgroundTaskManager = new VpnBackgroundTaskManager();
+  private networkMonitor?: connection.NetConnection;
+  private networkRebindTimer: number = -1;
+  private networkRebindInFlight: boolean = false;
+  private lastNetworkRebindAtMs: number = 0;
+  private uiBackendHandoffComplete: boolean = false;
+  private readonly networkAvailableCallback = (_handle: connection.NetHandle): void => {
+    this.scheduleNetworkRebind('available');
+  };
+  private readonly networkLostCallback = (_handle: connection.NetHandle): void => {
+    this.scheduleNetworkRebind('lost');
+  };
+  private readonly networkCapabilitiesCallback = (_info: connection.NetCapabilityInfo): void => {
+    this.scheduleNetworkRebind('capabilities');
+  };
+  private readonly networkPropertiesCallback = (_info: connection.NetConnectionPropertyInfo): void => {
+    this.scheduleNetworkRebind('properties');
+  };
   private vpnConnection?: vpnExtension.VpnConnection;
   private tunFd: number = -1;
   private statusTimer: number = -1;
@@ -296,6 +318,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   };
 
   onCreate(want: Want): void {
+    this.vpnBackgroundTask.register();
     this.recordDiagnosticEvent('vpn_extension_created', 'lifecycle');
     this.writePeerSnapshot([]);
     this.cleanupStaleTaildropOutbox();
@@ -479,7 +502,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         if (this.destroying) {
           return;
         }
-        const handoffStatus: string = await this.requestUiBackendHandoff();
+        const handoffStatus: string = this.uiBackendHandoffComplete ?
+          'OK | backend handoff | completed before extension start' :
+          await this.requestUiBackendHandoff();
         if (this.destroying) {
           return;
         }
@@ -498,6 +523,8 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         }
         this.writeStatus(finalStatus);
         if (finalStatus.includes('state=Running')) {
+          this.vpnBackgroundTask.onVpnConnected(this.context);
+          this.startNetworkMonitoring();
           this.recordDiagnosticEvent('vpn_connected', 'backend');
           const peerStatus: string = await nativeBridge.backendPeerProbeAsync();
           if (this.destroying) {
@@ -558,6 +585,80 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       }
     }
     return -1;
+  }
+
+  private startNetworkMonitoring(): void {
+    if (this.networkMonitor !== undefined || this.destroying) {
+      return;
+    }
+    try {
+      const monitor: connection.NetConnection = connection.createNetConnection();
+      monitor.on('netAvailable', this.networkAvailableCallback);
+      monitor.on('netLost', this.networkLostCallback);
+      monitor.on('netCapabilitiesChange', this.networkCapabilitiesCallback);
+      monitor.on('netConnectionPropertiesChange', this.networkPropertiesCallback);
+      monitor.register((error?: BusinessError): void => {
+        if (error !== undefined) {
+          this.recordDiagnosticEvent('network_monitor_failed', 'register', error.code ?? -1);
+          return;
+        }
+        this.recordDiagnosticEvent('network_monitor_started', 'native');
+      });
+      this.networkMonitor = monitor;
+    } catch (error) {
+      const businessError = error as BusinessError;
+      this.recordDiagnosticEvent('network_monitor_failed', 'create', businessError.code ?? -1);
+    }
+  }
+
+  private scheduleNetworkRebind(reason: string): void {
+    if (this.destroying || this.networkMonitor === undefined) {
+      return;
+    }
+    if (this.networkRebindTimer >= 0) {
+      clearTimeout(this.networkRebindTimer);
+    }
+    const elapsedMs: number = Date.now() - this.lastNetworkRebindAtMs;
+    const delayMs: number = Math.max(NETWORK_REBIND_DEBOUNCE_MS,
+      NETWORK_REBIND_MIN_INTERVAL_MS - Math.max(0, elapsedMs));
+    this.networkRebindTimer = setTimeout(() => {
+      this.networkRebindTimer = -1;
+      this.rebindForNetworkChange(reason);
+    }, delayMs);
+  }
+
+  private rebindForNetworkChange(reason: string): void {
+    if (this.destroying || this.networkRebindInFlight) {
+      return;
+    }
+    this.networkRebindInFlight = true;
+    this.lastNetworkRebindAtMs = Date.now();
+    nativeBridge.backendNetworkChangedAsync()
+      .then((status: string) => {
+        this.recordDiagnosticEvent(status.startsWith('OK') ?
+          'network_rebind_completed' : 'network_rebind_failed', reason);
+      })
+      .catch(() => this.recordDiagnosticEvent('network_rebind_failed', reason))
+      .finally(() => {
+        this.networkRebindInFlight = false;
+      });
+  }
+
+  private stopNetworkMonitoring(): void {
+    if (this.networkRebindTimer >= 0) {
+      clearTimeout(this.networkRebindTimer);
+      this.networkRebindTimer = -1;
+    }
+    const monitor: connection.NetConnection | undefined = this.networkMonitor;
+    this.networkMonitor = undefined;
+    if (monitor === undefined) {
+      return;
+    }
+    try {
+      monitor.unregister((_error?: BusinessError): void => {});
+    } catch (_error) {
+      // The system may already have released the callback with the VPN.
+    }
   }
 
   private async replaceExistingVpn(connection: vpnExtension.VpnConnection,
@@ -748,6 +849,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         handoff.config.length === 0 || handoff.config.length > 8192 || handoff.config.startsWith('FAILED')) {
         return '';
       }
+      this.uiBackendHandoffComplete = handoff.backendHandoffComplete === true;
       return handoff.config;
     } catch (_error) {
       return '';
@@ -1816,6 +1918,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
 
   onDestroy(): void {
     this.destroying = true;
+    this.stopNetworkMonitoring();
+    this.vpnBackgroundTask.onVpnDisconnected(this.context);
+    this.vpnBackgroundTask.unregister();
     this.recordDiagnosticEvent('vpn_extension_destroyed', 'lifecycle');
     this.stopBackendStopWatcher();
     if (this.statusTimer >= 0) {

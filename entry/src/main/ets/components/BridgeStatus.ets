@@ -87,8 +87,7 @@ import {
   HdsTabs,
   HdsTabsController,
   ScrollEffectType,
-  hdsEffect,
-  hdsMaterial
+  hdsEffect
 } from '@kit.UIDesignKit';
 import {
   ControlServerSettings,
@@ -1269,99 +1268,6 @@ export struct BridgeStatus {
     this.startPreparedTaildropFileSave(file);
   }
 
-  private scheduleExternalTabNavigation(index: number): void {
-    if (!this.appShellReady) {
-      return;
-    }
-    this.pendingExternalTabIndex = index;
-    if (this.externalTabNavigationTimer >= 0) {
-      return;
-    }
-    // AppStorage can be populated before HdsTabs binds its controller on a
-    // cold start. Route after the first shell frame without recreating a tab.
-    this.externalTabNavigationTimer = this.scheduleLifecycleTask(() => {
-      this.externalTabNavigationTimer = -1;
-      const targetIndex: number = this.pendingExternalTabIndex;
-      this.pendingExternalTabIndex = -1;
-      if (targetIndex >= 0) {
-        this.navigateToTab(targetIndex);
-      }
-    }, 32);
-  }
-
-  private onTaildropOpenInbox(): void {
-    if (this.taildropOpenInbox > 0) {
-      this.scheduleExternalTabNavigation(1);
-    }
-  }
-
-  private onTaildropNotificationAction(): void {
-    const request: TaildropNotificationActionRequest | undefined =
-      this.taildropReceiveGateway.parseNotificationAction(this.taildropNotificationAction);
-    if (request === undefined) {
-      return;
-    }
-    this.scheduleExternalTabNavigation(1);
-    if (request.action !== 'save') {
-      AppStorage.setOrCreate('taildropNotificationAction', '');
-      return;
-    }
-    const file: TaildropWaitingFileSummary | undefined = this.taildropWaitingFiles.find(
-      (candidate: TaildropWaitingFileSummary) =>
-        candidate.name === request.fileName && candidate.size === request.size &&
-          (request.receivedAtMs < 0 || candidate.receivedAtMs === request.receivedAtMs));
-    if (file !== undefined) {
-      if (!this.taildropReceiveGateway.claimNotificationAction(request)) {
-        AppStorage.setOrCreate('taildropNotificationAction', '');
-        return;
-      }
-      this.taildropNotificationActionInFlight = request;
-      AppStorage.setOrCreate('taildropNotificationAction', '');
-      this.taildropNotificationActionRetryScheduled = false;
-      this.saveTaildropFileFromNotification(file);
-    } else if (!this.taildropNotificationActionRetryScheduled) {
-      this.taildropNotificationActionRetryScheduled = true;
-      this.scheduleLifecycleTask(() => {
-        this.taildropNotificationActionRetryScheduled = false;
-        this.onTaildropNotificationAction();
-      }, 800);
-    }
-  }
-
-  private saveTaildropFileFromNotification(file: TaildropWaitingFileSummary): void {
-    if (this.taildropSendActive() || this.taildropReceiveInProgress) {
-      this.showToast($r('app.string.transfer_busy_message'));
-      this.releaseTaildropNotificationActionClaim();
-      return;
-    }
-    const kind: string = this.taildropContentKind(file);
-    if (kind === 'text') {
-      const cached: TaildropCachedFile | undefined = this.findTaildropCachedFile(file);
-      if (cached !== undefined) {
-        if (this.showCachedTaildropTextPreview(cached)) {
-          this.copyTaildropTextPreview();
-        } else {
-          this.releaseTaildropNotificationActionClaim();
-        }
-      } else {
-        this.startTaildropReceive(file);
-      }
-      return;
-    }
-    if (kind === 'image' || kind === 'video') {
-      const preview: TaildropMediaPreview | undefined = this.findTaildropMediaPreview(file);
-      if (preview !== undefined) {
-        this.releaseTaildropNotificationActionClaim();
-        this.showToast($r('app.string.transfer_media_ready_to_save'));
-      } else {
-        this.releaseTaildropNotificationActionClaim();
-        this.startTaildropReceive(file);
-      }
-      return;
-    }
-    this.startPreparedTaildropFileSave(file);
-  }
-
   private toggleControlServerEditor(): void {
     const visible: boolean = !this.controlServerEditorVisible;
     this.controlServerEditorVisible = visible;
@@ -1957,10 +1863,10 @@ export struct BridgeStatus {
     };
   }
 
-  private stageVpnConnectConfig(config: string): boolean {
+  private stageVpnConnectConfig(config: string, backendHandoffComplete: boolean = false): boolean {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     return this.vpnCommandGateway.stageConnectConfig(context.filesDir,
-      VPN_CONNECT_CONFIG_FILE_NAME, config);
+      VPN_CONNECT_CONFIG_FILE_NAME, config, backendHandoffComplete);
   }
 
   private cacheVpnReconnectConfig(): boolean {
@@ -1990,7 +1896,7 @@ export struct BridgeStatus {
       ageMs < 0 || ageMs > FAST_RECONNECT_TTL_MS) {
       return false;
     }
-    if (!this.stageVpnConnectConfig(this.cachedVpnConnectConfig)) {
+    if (!this.stageVpnConnectConfig(this.cachedVpnConnectConfig, true)) {
       this.recordDiagnosticEvent('fast_reconnect_failed', 'persistence');
       return false;
     }
@@ -2102,6 +2008,7 @@ export struct BridgeStatus {
     if (!this.vpnCommandStateMachine.isActive(commandId)) {
       return;
     }
+    let backendHandoffComplete: boolean = false;
     try {
       if (this.tryFastReconnect(commandId)) {
         return;
@@ -2118,7 +2025,25 @@ export struct BridgeStatus {
         this.vpnCommandStateMachine.complete(commandId, VpnCommandState.NEEDS_LOGIN);
         return;
       }
-      if (this.stageVpnConnectConfig(backendConfig)) {
+      const handoffStatus: string = await this.vpnCommandGateway.stopBackend();
+      if (!this.vpnCommandStateMachine.isActive(commandId)) {
+        if (handoffStatus.startsWith('OK')) {
+          this.startBackend(false);
+        }
+        return;
+      }
+      if (!handoffStatus.startsWith('OK')) {
+        this.recordDiagnosticEvent('vpn_backend_handoff_stop_failed', 'preflight');
+        this.vpnStatus = 'FAILED | VPN preflight | backend handoff unavailable';
+        this.clearConnectionCompletionTimer();
+        this.setConnectInProgress(false);
+        this.vpnCommandStateMachine.complete(commandId, VpnCommandState.STOPPED);
+        return;
+      }
+      backendHandoffComplete = true;
+      this.backendStatus = handoffStatus;
+      this.recordDiagnosticEvent('vpn_backend_handoff_stopped', 'preflight');
+      if (this.stageVpnConnectConfig(backendConfig, true)) {
         this.recordDiagnosticEvent('vpn_config_handoff_staged', 'preflight');
       } else {
         this.recordDiagnosticEvent('vpn_config_handoff_failed', 'persistence');
@@ -2126,6 +2051,7 @@ export struct BridgeStatus {
         this.clearConnectionCompletionTimer();
         this.setConnectInProgress(false);
         this.vpnCommandStateMachine.complete(commandId, VpnCommandState.STOPPED);
+        this.startBackend(false);
         return;
       }
       this.requestVpnExtensionStart(commandId);
@@ -2135,6 +2061,9 @@ export struct BridgeStatus {
       this.clearConnectionCompletionTimer();
       this.setConnectInProgress(false);
       this.vpnCommandStateMachine.complete(commandId, VpnCommandState.STOPPED);
+      if (backendHandoffComplete) {
+        this.startBackend(false);
+      }
     }
   }
 
@@ -2197,6 +2126,7 @@ export struct BridgeStatus {
         this.clearConnectionCompletionTimer();
         this.setConnectInProgress(false);
         this.vpnCommandStateMachine.complete(commandId, VpnCommandState.STOPPED);
+        this.startBackend(false);
       });
   }
 
@@ -4213,19 +4143,6 @@ export struct BridgeStatus {
     return this.glowLevel === 0 ? 1.12 : (this.glowLevel === 1 ? 1.07 : 1.02);
   }
 
-  private glowMaterialLevel(): hdsMaterial.MaterialLevel {
-    if (this.glowLevel === 0) {
-      return hdsMaterial.MaterialLevel.EXQUISITE;
-    }
-    if (this.glowLevel === 1) {
-      return hdsMaterial.MaterialLevel.GENTLE;
-    }
-    if (this.glowLevel === 2) {
-      return hdsMaterial.MaterialLevel.SMOOTH;
-    }
-    return hdsMaterial.MaterialLevel.ADAPTIVE;
-  }
-
   private immersivePressEffect(): VisualEffect {
     return new hdsEffect.HdsEffectBuilder()
       .pointLight({
@@ -5049,7 +4966,7 @@ export struct BridgeStatus {
       }
       const latest: DeviceStreamingState = this.streamingState(peer.key);
       if (latest.checking) {
-        if (!this.isConnected() || Date.now() - launchStartedAt > 5000) {
+        if (!this.isConnected() || Date.now() - launchStartedAt > 13000) {
           this.updateStreamingState(peer.key, this.copyStreamingState(latest, undefined, undefined, false, false));
           this.showToast('Sunshine 检测超时，请检查目标电脑防火墙或网络状态。');
           return;
@@ -11501,7 +11418,6 @@ export struct BridgeStatus {
         bottomInset: this.pageBottomInset(),
         contentScroller: this.filesScroller,
         titleBarPadding: this.contentMargin(),
-        materialLevel: this.glowMaterialLevel(),
         targetMachineName: this.taildriveTargetMachineName,
         targetRequestId: this.taildriveTargetRequestId
       })
@@ -11673,10 +11589,6 @@ export struct BridgeStatus {
             }
           }
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: this.glowMaterialLevel()
-        }
       },
       content: {
         stackBuilder: (): void => this.HomeTitleTopInset(),
@@ -11738,10 +11650,6 @@ export struct BridgeStatus {
             }
           }
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: this.glowMaterialLevel()
-        }
       },
       content: {
         title: {
@@ -11802,10 +11710,6 @@ export struct BridgeStatus {
             }
           }
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: this.glowMaterialLevel()
-        }
       },
       content: {
         title: {
@@ -11963,29 +11867,7 @@ export struct BridgeStatus {
     .barHeight(56)
     .barOverlap(true)
     .barBackgroundColor(Color.Transparent)
-    .barFloatingStyle({
-      barSideMargin: 36,
-      barBottomMargin: this.navigationBottomMargin,
-      gradientMask: {
-        maskColor: $r('sys.color.background_secondary'),
-        maskHeight: 48 + this.navigationBottomMargin
-      },
-      lightColor: this.glowLightColor(),
-      barOpacity: 0.96,
-      thermoCtrl: true,
-      systemMaterialEffect: {
-        materialType: hdsMaterial.MaterialType.ADAPTIVE,
-        materialLevel: this.glowMaterialLevel()
-      }
-    })
     .divider({ mode: DividerMode.NONE })
-    .onSelected((index: number) => {
-      this.handleNavigationTabChange(index, false);
-      // HdsTabs emits onSelected when the swipe transition starts and
-      // onChange after it completes. Writing the controlled index here makes
-      // the component jump straight to the destination and cancels the
-      // interactive page animation.
-    })
     .onChange((index: number) => {
       this.handleNavigationTabChange(index, true);
     })

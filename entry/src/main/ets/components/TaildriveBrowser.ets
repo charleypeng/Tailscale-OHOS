@@ -9,8 +9,7 @@ import {
   BlurStrategy,
   HdsNavigation,
   HdsNavigationTitleMode,
-  TextStyleMode,
-  hdsMaterial
+  TextStyleMode
 } from '@kit.UIDesignKit';
 import {
   PreparedTaildriveFile,
@@ -90,7 +89,6 @@ export struct TaildriveBrowser {
   @Prop standalone: boolean = false;
   @Prop bottomInset: number = 0;
   @Prop titleBarPadding: number = 16;
-  @Prop materialLevel: hdsMaterial.MaterialLevel = hdsMaterial.MaterialLevel.ADAPTIVE;
   @Prop targetMachineName: string = '';
   @Prop @Watch('onTargetRequestChanged') targetRequestId: number = 0;
   @StorageLink('taildriveBackRequest') @Watch('onBackRequestChanged') backRequest: number = 0;

@@ -124,10 +124,13 @@ export class VpnCommandGateway {
     await vpnExtension.stopVpnExtensionAbility(want);
   }
 
-  stageConnectConfig(filesDir: string, fileName: string, config: string): boolean {
+  stageConnectConfig(filesDir: string, fileName: string, config: string,
+    backendHandoffComplete: boolean = false): boolean {
     const path: string = `${filesDir}/${fileName}`;
     const temporaryPath: string = `${path}.tmp`;
-    const handoff: VpnConnectConfigHandoff = { createdAtMs: Date.now(), config: config };
+    const handoff: VpnConnectConfigHandoff = {
+      createdAtMs: Date.now(), config: config, backendHandoffComplete: backendHandoffComplete
+    };
     try {
       if (!this.writeTextFile(temporaryPath, JSON.stringify(handoff))) {
         return false;
@@ -178,4 +181,5 @@ export class VpnCommandGateway {
 export interface VpnConnectConfigHandoff {
   createdAtMs: number;
   config: string;
+  backendHandoffComplete?: boolean;
 }

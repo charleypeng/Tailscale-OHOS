@@ -16,6 +16,7 @@ export struct CompactConnectedHomeHeader {
   onExitNodeInfo: () => void = () => {};
   onExitNodeSelect: (index: number) => void = (_index: number) => {};
   @BuilderParam connectionButton: () => void;
+  @BuilderParam trafficBackdrop: () => void;
 
   build() {
     Column({ space: 6 }) {
@@ -81,7 +82,6 @@ export struct CompactConnectedHomeHeader {
         .width('100%')
         .height(38)
         .padding({ left: 10, right: 10 })
-        .alignItems(VerticalAlign.Center)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .borderRadius(12)
         .onClick(this.onDetails)

@@ -84,7 +84,25 @@ export class VpnBackgroundTaskManager {
     this.stop(context);
   }
 
-  private startWhenVpnActive(context: common.UIAbilityContext,
+  // The VPN Extension owns the TUN and the embedded Tailscale backend. Keep
+  // that process covered for the whole VPN session instead of tying coverage
+  // only to the foreground UI lifecycle.
+  onVpnConnected(context: common.Context): void {
+    this.isBackground = true;
+    const generation: number = ++this.lifecycleGeneration;
+    this.clearRetryTimer();
+    this.startWhenVpnActive(context, generation, 0);
+  }
+
+  onVpnDisconnected(context: common.Context): void {
+    this.isBackground = false;
+    this.lifecycleGeneration++;
+    this.clearRetryTimer();
+    this.stopHealthCheck();
+    this.stop(context);
+  }
+
+  private startWhenVpnActive(context: common.Context,
     generation: number, attempt: number): void {
     if (!this.isBackground || generation !== this.lifecycleGeneration ||
       this.isStarted || this.startInFlight || this.stopInFlight) {
@@ -105,7 +123,7 @@ export class VpnBackgroundTaskManager {
     }, START_RETRY_INTERVAL_MS);
   }
 
-  private async start(context: common.UIAbilityContext, generation: number): Promise<void> {
+  private async start(context: common.Context, generation: number): Promise<void> {
     this.startInFlight = true;
     try {
       const info: wantAgent.WantAgentInfo = {
@@ -122,14 +140,14 @@ export class VpnBackgroundTaskManager {
         return;
       }
       await backgroundTaskManager.startBackgroundRunning(
-        context, backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
+        context, backgroundTaskManager.BackgroundMode.MULTI_DEVICE_CONNECTION, agent);
       if (!this.isBackground || generation !== this.lifecycleGeneration) {
         await backgroundTaskManager.stopBackgroundRunning(context);
         return;
       }
       this.isStarted = true;
       this.startHealthCheck(context, generation);
-      hilog.info(DOMAIN, TAG, 'VPN DATA_TRANSFER background task started');
+      hilog.info(DOMAIN, TAG, 'VPN MULTI_DEVICE_CONNECTION background task started');
     } catch (error) {
       const businessError = error as BusinessError;
       hilog.error(DOMAIN, TAG,
@@ -140,7 +158,7 @@ export class VpnBackgroundTaskManager {
     }
   }
 
-  private async stop(context: common.UIAbilityContext): Promise<void> {
+  private async stop(context: common.Context): Promise<void> {
     if (this.stopInFlight) {
       return;
     }
@@ -156,7 +174,7 @@ export class VpnBackgroundTaskManager {
       }
       await backgroundTaskManager.stopBackgroundRunning(context);
       this.isStarted = false;
-      hilog.info(DOMAIN, TAG, 'VPN DATA_TRANSFER background task stopped');
+      hilog.info(DOMAIN, TAG, 'VPN MULTI_DEVICE_CONNECTION background task stopped');
     } catch (error) {
       const businessError = error as BusinessError;
       hilog.warn(DOMAIN, TAG,
@@ -170,7 +188,7 @@ export class VpnBackgroundTaskManager {
     }
   }
 
-  private startHealthCheck(context: common.UIAbilityContext, generation: number): void {
+  private startHealthCheck(context: common.Context, generation: number): void {
     this.stopHealthCheck();
     this.healthTimer = setInterval(() => {
       if (!this.isBackground || generation !== this.lifecycleGeneration ||

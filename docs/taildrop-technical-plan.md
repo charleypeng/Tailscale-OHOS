@@ -2,7 +2,7 @@
 
 ## Conclusion
 
-Taildrop is feasible in this app with the bundled Tailscale 1.86.5 code. The network protocol, PeerAPI receiver, target filtering, retry/resume logic, staging-file manager, and LocalAPI client methods are already present upstream. The main work is platform integration: register the Taildrop extension in the Go binary, bridge requests into the VPN Extension process, and move files between HarmonyOS Picker URIs and the app sandbox.
+Taildrop is feasible in this app with the bundled Tailscale 1.102.4 code. The network protocol, PeerAPI receiver, target filtering, retry/resume logic, staging-file manager, and LocalAPI client methods are already present upstream. The main work is platform integration: register the Taildrop extension in the Go binary, bridge requests into the VPN Extension process, and move files between HarmonyOS Picker URIs and the app sandbox.
 
 The recommended first release is an in-app send/receive experience. System share-sheet integration can follow after the transfer core is stable.
 
@@ -18,10 +18,10 @@ The recommended first release is an in-app send/receive experience. System share
 
 Relevant upstream code:
 
-- [Local client file APIs](https://github.com/tailscale/tailscale/blob/v1.86.5/client/local/local.go#L735-L810)
-- [Send progress and resume](https://github.com/tailscale/tailscale/blob/v1.86.5/feature/taildrop/localapi.go#L271-L356)
-- [Target eligibility and receive inbox](https://github.com/tailscale/tailscale/blob/v1.86.5/feature/taildrop/ext.go#L277-L410)
-- [Partial-file receive and atomic finalize](https://github.com/tailscale/tailscale/blob/v1.86.5/feature/taildrop/send.go#L61-L164)
+- [Local client file APIs](https://github.com/tailscale/tailscale/blob/v1.102.4/client/local/local.go)
+- [Send progress and resume](https://github.com/tailscale/tailscale/blob/v1.102.4/feature/taildrop/localapi.go)
+- [Target eligibility and receive inbox](https://github.com/tailscale/tailscale/blob/v1.102.4/feature/taildrop/ext.go)
+- [Partial-file receive and atomic finalize](https://github.com/tailscale/tailscale/blob/v1.102.4/feature/taildrop/send.go)
 
 ## Current `main` status
 

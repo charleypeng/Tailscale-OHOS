@@ -451,6 +451,12 @@ napi_value BackendVpnConfigAsync(napi_env env, napi_callback_info info)
     return CreateAsyncStringPromise(env, TSBackendVPNConfig, "TailscaleBackendVpnConfig");
 }
 
+napi_value BackendNetworkChangedAsync(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    return CreateAsyncStringPromise(env, TSBackendNetworkChanged, "TailscaleBackendNetworkChanged");
+}
+
 napi_value ProbeEngineAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -970,6 +976,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"backendStop", nullptr, BackendStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendLogout", nullptr, BackendLogout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStatus", nullptr, BackendStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"backendNetworkChangedAsync", nullptr, BackendNetworkChangedAsync, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
         {"backendSnapshot", nullptr, BackendSnapshotAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendTaildropIncomingSnapshot", nullptr, BackendTaildropIncomingSnapshotAsync,
             nullptr, nullptr, nullptr, napi_default, nullptr},

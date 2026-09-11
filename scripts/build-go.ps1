@@ -55,7 +55,7 @@ if (-not (Test-Path $go)) {
   throw 'The OpenHarmony Go toolchain has not been built yet.'
 }
 
-$goResourcePatch = Join-Path $projectRoot 'patches\ohos-go-interface-resources.patch'
+$goResourcePatch = Join-Path $projectRoot 'patches\ohos-go-openharmony.patch'
 if (-not (Test-Path $goResourcePatch)) {
   throw "The OpenHarmony Go resource-safety patch is missing at $goResourcePatch"
 }
@@ -95,6 +95,15 @@ if (-not $tailscalePatchAlreadyApplied) {
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 New-Item -ItemType Directory -Force -Path $hapLibDir | Out-Null
 
+$goModPath = Join-Path $projectRoot 'native\go_bridge\go.mod'
+$tailscaleVersionMatch = Select-String -Path $goModPath -Pattern 'tailscale\.com\s+v([0-9]+\.[0-9]+\.[0-9]+)' -AllMatches |
+  Select-Object -First 1
+$tailscaleVersion = if ($tailscaleVersionMatch) {
+  $tailscaleVersionMatch.Matches[0].Groups[1].Value
+} else {
+  throw "Tailscale version is missing from $goModPath"
+}
+
 $env:GOROOT = $goRoot
 $env:GOOS = 'openharmony'
 $env:GOARCH = 'arm64'
@@ -107,7 +116,7 @@ $env:CXX = "$clangxx --target=aarch64-linux-ohos --sysroot=$sysroot -D__MUSL__"
 
 Push-Location (Join-Path $projectRoot 'native\go_bridge')
 try {
-  $linkerFlags = '-extldflags=-Wl,-soname,libtailscale_go.so -X tailscale.com/version.longStamp=1.86.5 -X tailscale.com/version.shortStamp=1.86.5'
+  $linkerFlags = "-extldflags=-Wl,-soname,libtailscale_go.so -X tailscale.com/version.longStamp=$tailscaleVersion -X tailscale.com/version.shortStamp=$tailscaleVersion"
   & $go build -buildmode=c-shared -trimpath `
     "-ldflags=$linkerFlags" `
     -o (Join-Path $outputDir 'libtailscale_go.so') .

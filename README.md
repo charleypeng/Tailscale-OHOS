@@ -12,7 +12,7 @@ The project now provides a signed ArkTS application with this native stack:
 ArkTS UI / VpnExtensionAbility
   -> C++ Node-API bridge
   -> OpenHarmony arm64 Go c-shared library
-  -> Tailscale v1.86.5 userspace engine
+  -> Tailscale v1.102.4 userspace engine
   -> HarmonyOS vpn-tun file descriptor
 ```
 
@@ -92,7 +92,7 @@ for the parameter contract, privacy rules, and server-free engineering test.
 - Status and test results deliberately omit auth URLs, node identities,
   tailnet addresses, keys, and signing information.
 - The control-plane machine name is derived from HarmonyOS `marketName` (with
-  `productModel` as fallback), and build metadata reports Tailscale `1.86.5`
+  `productModel` as fallback), and build metadata reports Tailscale `1.102.4`
   with `Linux HongMeng Kernel Build 1.12.0` as the OS build line.
 
 ## Build and real-device checks
@@ -128,8 +128,46 @@ cannot be committed accidentally; `build-profile.example.json5` documents the
 non-sensitive project shape. Configure local HarmonyOS signing before running
 the signed-HAP and HDC workflow.
 
-Tailscale is pinned to v1.86.5 because it supports the Go 1.24 toolchain used by
-the current OpenHarmony SIG Go port.
+On macOS, the same HarmonyOS project can be built with the downloaded Command
+Line Tools. `scripts/build-macos.sh` discovers the SDK, Hvigor, Node.js, JDK,
+OpenHarmony Go toolchain, and local `@tailscale/common` module, then builds and
+verifies an arm64 unsigned HAP:
+
+```bash
+scripts/build-macos.sh
+```
+
+The default Command Line Tools location is
+`/Volumes/Doc/Library/Huawei/command-line-tools`; override it with
+`HUAWEI_COMMAND_LINE_TOOLS_HOME` or set `DEVECO_SDK_HOME` explicitly. This is a
+HarmonyOS HAP built on a Mac, not a macOS `.app`. Add local signing configuration
+to the ignored `build-profile.json5` before installing it on a device.
+
+The Tailscale userspace engine is updated to the latest upstream release
+`v1.102.4`. Its module requires Go `1.26.6`, so this repository uses the
+OpenHarmony SIG `release-branch.go1.26` source plus the tracked
+`patches/ohos-go-openharmony.patch` port.
+
+To update the Tailscale userspace engine, fetch a new upstream tag, temporarily
+reverse the current HarmonyOS patch, check out the new tag, apply and rebase the
+patch, then update the `tailscale.com` version in
+`native/go_bridge/go.mod`. Regenerate the tracked patch after resolving any
+conflicts:
+
+```bash
+git -C third_party/tailscale fetch --tags origin
+git -C third_party/tailscale apply --reverse ../../patches/tailscale-ohos.patch
+git -C third_party/tailscale switch --detach vX.Y.Z
+git -C third_party/tailscale apply ../../patches/tailscale-ohos.patch
+git -C third_party/tailscale diff --binary > patches/tailscale-ohos.patch
+```
+
+Before building a release that raises Tailscale's Go requirement, use a
+matching OpenHarmony Go branch, apply `patches/ohos-go-openharmony.patch`, and
+regenerate that patch from the clean branch. The Go bridge build embeds the
+version from `native/go_bridge/go.mod`. The HarmonyOS patches are platform
+code, not upstream release artifacts, so every version update must be
+compiled and tested again.
 
 ## Roadmap to a distributable client
 

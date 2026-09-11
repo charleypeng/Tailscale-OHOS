@@ -50,7 +50,7 @@ func TSProbeEngine() (result *C.char) {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
@@ -86,6 +86,11 @@ func TSBackendLogout() *C.char {
 //export TSBackendStatus
 func TSBackendStatus() *C.char {
 	return C.CString(harmonyBackend.status())
+}
+
+//export TSBackendNetworkChanged
+func TSBackendNetworkChanged() *C.char {
+	return C.CString(harmonyBackend.networkChanged())
 }
 
 //export TSBackendSnapshot

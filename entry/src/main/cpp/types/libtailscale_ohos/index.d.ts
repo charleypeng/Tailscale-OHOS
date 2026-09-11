@@ -6,6 +6,7 @@ export const backendStart: (stateDir: string, deviceModel: string,
 export const backendStop: () => string;
 export const backendLogout: () => string;
 export const backendStatus: () => string;
+export const backendNetworkChangedAsync: () => Promise<string>;
 export const backendSnapshot: () => Promise<string>;
 export const backendTaildropIncomingSnapshot: () => Promise<string>;
 export const backendStopAsync: () => Promise<string>;

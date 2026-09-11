@@ -5,7 +5,10 @@ import { ConnectionPathType, PeerPathResult } from './StreamingModels';
 const REQUEST_FILE: string = 'peer-connectivity-request.json';
 const RESPONSE_FILE: string = 'peer-connectivity-response.json';
 const CACHE_TTL_MS: number = 25000;
-const TIMEOUT_MS: number = 4000;
+// A connection begins on DERP while magicsock negotiates a direct UDP path.
+// Give the native probe enough time to observe that upgrade instead of caching
+// the first relay response as if it were the settled path.
+const TIMEOUT_MS: number = 12000;
 
 interface PeerPathResponse {
   requestId: number;

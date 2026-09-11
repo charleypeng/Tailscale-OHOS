@@ -11,7 +11,6 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { APP_FOREGROUND_EVENT } from '../services/AppLifecycleEvents';
 import { AppShellFeatureAction, AppShellIntentAdapter } from '../services/AppShellIntentAdapter';
-import { VpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
 import { DiagnosticPrivacy } from '../services/DiagnosticPrivacy';
 import { WindowEnvironment } from '../services/WindowEnvironment';
 
@@ -20,7 +19,6 @@ const TAG = 'TailscaleOHOS';
 
 export default class EntryAbility extends UIAbility {
   private mainWindow?: window.Window;
-  private readonly vpnBackgroundTask: VpnBackgroundTaskManager = new VpnBackgroundTaskManager();
   private readonly appShellIntentAdapter: AppShellIntentAdapter = new AppShellIntentAdapter();
   private readonly windowEnvironment: WindowEnvironment = new WindowEnvironment();
   private appShellContentReady: boolean = false;
@@ -56,7 +54,6 @@ export default class EntryAbility extends UIAbility {
   }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    this.vpnBackgroundTask.register();
     this.handleTaildropNotificationWant(want);
     hilog.info(DOMAIN, TAG, 'EntryAbility onCreate. ability=%{public}s reason=%{public}d',
       want.abilityName ?? '', launchParam.launchReason);
@@ -64,7 +61,6 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     this.windowEnvironment.detach();
-    this.vpnBackgroundTask.unregister();
     hilog.info(DOMAIN, TAG, 'EntryAbility onDestroy');
   }
 
@@ -112,14 +108,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
-    this.vpnBackgroundTask.onForeground(this.context);
     this.applyEdgeToEdge(this.context.config.colorMode);
     this.context.eventHub.emit(APP_FOREGROUND_EVENT);
     hilog.info(DOMAIN, TAG, 'EntryAbility onForeground');
   }
 
   onBackground(): void {
-    this.vpnBackgroundTask.onBackground(this.context);
     hilog.info(DOMAIN, TAG, 'EntryAbility onBackground');
   }
 

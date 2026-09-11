@@ -21,10 +21,10 @@
         "label": "$string:entryability_label",
         "startWindowIcon": "$media:start_window_icon",
         "startWindowBackground": "$color:start_window_background",
-        "exported": true,
         "backgroundModes": [
-          "dataTransfer"
+          "multiDeviceConnection"
         ],
+        "exported": true,
         "skills": [
           {
             "entities": [
@@ -51,6 +51,9 @@
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO"
       },
       {
         "name": "ohos.permission.GET_BUNDLE_INFO"

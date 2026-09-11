@@ -2027,13 +2027,17 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 
 	// PingDisco is Tailscale's path-discovery primitive. Unlike TSMP it reports
 	// direct endpoints, peer relays, and DERP regions without guessing from RTT.
-	const attempts = 2
+	const attempts = 6
+	probeDeadline := time.Now().Add(10 * time.Second)
 	latencies := make([]int, 0, attempts)
-	result.Sent = attempts
 	pathType := "unknown"
 	relayRegion := ""
 	for attempt := 0; attempt < attempts; attempt++ {
-		pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if time.Now().After(probeDeadline) {
+			break
+		}
+		result.Sent++
+		pingCtx, pingCancel := context.WithDeadline(context.Background(), probeDeadline)
 		pingResult, pingErr := client.Ping(pingCtx, target, tailcfg.PingDisco)
 		pingCancel()
 		if pingErr == nil && pingResult != nil && pingResult.Err == "" {
@@ -2042,6 +2046,7 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 			if pingResult.Endpoint != "" {
 				pathType = "direct"
 				relayRegion = ""
+				break
 			} else if pathType != "direct" && pingResult.PeerRelay != "" {
 				pathType = "peerRelay"
 				relayRegion = ""
@@ -2050,12 +2055,14 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 				relayRegion = pingResult.DERPRegionCode
 			}
 		}
-		if attempt+1 < attempts {
-			time.Sleep(200 * time.Millisecond)
+		if attempt+1 < attempts && time.Now().Before(probeDeadline) {
+			time.Sleep(time.Second)
 		}
 	}
 	result.Received = len(latencies)
-	result.LossPercent = (attempts - result.Received) * 100 / attempts
+	if result.Sent > 0 {
+		result.LossPercent = (result.Sent - result.Received) * 100 / result.Sent
+	}
 	if result.Received == 0 {
 		result.Reason = "no_response"
 		return marshalPeerConnectivity(result)
@@ -2659,6 +2666,29 @@ func (b *backendController) status() string {
 	}
 	prefs, prefsErr := client.GetPrefs(ctx)
 	return b.formatRunningStatus(status, prefs, prefsErr)
+}
+
+// networkChanged forces magicsock to move its UDP sockets to the current
+// physical network and immediately refresh its STUN endpoints. OpenHarmony is
+// built with Linux tags, but its application sandbox does not reliably deliver
+// the netlink events that upstream netmon expects when Wi-Fi and cellular
+// networks switch.
+func (b *backendController) networkChanged() string {
+	b.mu.Lock()
+	client := b.client
+	b.mu.Unlock()
+	if client == nil {
+		return "FAILED | network change | backend unavailable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.DebugAction(ctx, "rebind"); err != nil {
+		return "FAILED | network change | rebind failed"
+	}
+	if err := client.DebugAction(ctx, "restun"); err != nil {
+		return "FAILED | network change | restun failed"
+	}
+	return "OK | network change | UDP rebound and endpoints refreshed"
 }
 
 func (b *backendController) formatRunningStatus(
