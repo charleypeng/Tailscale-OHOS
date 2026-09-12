@@ -21,9 +21,6 @@ import (
 //export TSHello
 func TSHello() *C.char {
 	platform := runtime.GOOS
-	if runtime.IsOpenharmony {
-		platform = "openharmony"
-	}
 	message := fmt.Sprintf("OK · Go %s · %s/%s", runtime.Version(), platform, runtime.GOARCH)
 	return C.CString(message)
 }

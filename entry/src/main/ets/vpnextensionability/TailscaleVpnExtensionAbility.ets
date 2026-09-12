@@ -14,7 +14,8 @@ import {
 } from '../services/TaildropNotificationService';
 import { ControlServerConfig, ControlServerSettings } from '../services/ControlServerConfig';
 import { DeviceNameService } from '../services/DeviceNameService';
-import { VpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
+import { NetworkRebindScheduler } from '../services/NetworkRebindScheduler';
+import { VPN_REQUEST_INTERVAL_MS, VPN_STATUS_INTERVAL_MS } from '../services/VpnTiming';
 
 const DOMAIN = 0x0000;
 const TAG = 'TailscaleVpn';
@@ -59,8 +60,6 @@ const VPN_CONNECT_CONFIG_TTL_MS: number = 15000;
 const VPN_BACKEND_STATUS_POLL_INTERVAL_MS: number = 100;
 const VPN_BACKEND_STATUS_MAX_ATTEMPTS: number = 150;
 const FILE_WATCH_CLOSE_WRITE: number = 0x8;
-const NETWORK_REBIND_DEBOUNCE_MS: number = 750;
-const NETWORK_REBIND_MIN_INTERVAL_MS: number = 3000;
 
 interface PeerSummary {
   key: string;
@@ -271,11 +270,24 @@ function emptyTaildropTransfer(): TaildropTransferSummary {
 }
 
 export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
-  private readonly vpnBackgroundTask: VpnBackgroundTaskManager = new VpnBackgroundTaskManager();
   private networkMonitor?: connection.NetConnection;
-  private networkRebindTimer: number = -1;
-  private networkRebindInFlight: boolean = false;
-  private lastNetworkRebindAtMs: number = 0;
+  private readonly networkRebindScheduler: NetworkRebindScheduler =
+    new NetworkRebindScheduler(async (reason: string): Promise<void> => {
+      try {
+        const status: string = await nativeBridge.backendNetworkChangedAsync();
+        if (!status.startsWith('OK')) {
+          throw new Error('Network rebind failed');
+        }
+        if (!this.destroying) {
+          this.recordDiagnosticEvent('network_rebind_completed', reason);
+        }
+      } catch (_error) {
+        if (!this.destroying) {
+          this.recordDiagnosticEvent('network_rebind_failed', reason);
+        }
+        throw new Error('Network rebind failed');
+      }
+    });
   private uiBackendHandoffComplete: boolean = false;
   private readonly networkAvailableCallback = (_handle: connection.NetHandle): void => {
     this.scheduleNetworkRebind('available');
@@ -293,7 +305,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   private tunFd: number = -1;
   private statusTimer: number = -1;
   private taildropRequestTimer: number = -1;
-  private taildropIncomingTimer: number = -1;
   private statusUpdateInFlight: boolean = false;
   private taildropIncomingSnapshotInFlight: boolean = false;
   private currentVisibleStatus: string = 'VPN extension lifecycle entered';
@@ -318,7 +329,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   };
 
   onCreate(want: Want): void {
-    this.vpnBackgroundTask.register();
     this.recordDiagnosticEvent('vpn_extension_created', 'lifecycle');
     this.writePeerSnapshot([]);
     this.cleanupStaleTaildropOutbox();
@@ -523,15 +533,14 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         }
         this.writeStatus(finalStatus);
         if (finalStatus.includes('state=Running')) {
-          this.vpnBackgroundTask.onVpnConnected(this.context);
           this.startNetworkMonitoring();
+          this.startStatusUpdates();
           this.recordDiagnosticEvent('vpn_connected', 'backend');
           const peerStatus: string = await nativeBridge.backendPeerProbeAsync();
           if (this.destroying) {
             return;
           }
           this.writePeerStatus(peerStatus);
-          this.startStatusUpdates();
         }
       } else {
         const backendState: string = backendConfigText.startsWith('FAILED') ?
@@ -612,43 +621,13 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   }
 
   private scheduleNetworkRebind(reason: string): void {
-    if (this.destroying || this.networkMonitor === undefined) {
-      return;
+    if (!this.destroying && this.networkMonitor !== undefined) {
+      this.networkRebindScheduler.schedule(reason);
     }
-    if (this.networkRebindTimer >= 0) {
-      clearTimeout(this.networkRebindTimer);
-    }
-    const elapsedMs: number = Date.now() - this.lastNetworkRebindAtMs;
-    const delayMs: number = Math.max(NETWORK_REBIND_DEBOUNCE_MS,
-      NETWORK_REBIND_MIN_INTERVAL_MS - Math.max(0, elapsedMs));
-    this.networkRebindTimer = setTimeout(() => {
-      this.networkRebindTimer = -1;
-      this.rebindForNetworkChange(reason);
-    }, delayMs);
-  }
-
-  private rebindForNetworkChange(reason: string): void {
-    if (this.destroying || this.networkRebindInFlight) {
-      return;
-    }
-    this.networkRebindInFlight = true;
-    this.lastNetworkRebindAtMs = Date.now();
-    nativeBridge.backendNetworkChangedAsync()
-      .then((status: string) => {
-        this.recordDiagnosticEvent(status.startsWith('OK') ?
-          'network_rebind_completed' : 'network_rebind_failed', reason);
-      })
-      .catch(() => this.recordDiagnosticEvent('network_rebind_failed', reason))
-      .finally(() => {
-        this.networkRebindInFlight = false;
-      });
   }
 
   private stopNetworkMonitoring(): void {
-    if (this.networkRebindTimer >= 0) {
-      clearTimeout(this.networkRebindTimer);
-      this.networkRebindTimer = -1;
-    }
+    this.networkRebindScheduler.stop();
     const monitor: connection.NetConnection | undefined = this.networkMonitor;
     this.networkMonitor = undefined;
     if (monitor === undefined) {
@@ -931,28 +910,26 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     if (this.taildropRequestTimer >= 0) {
       clearInterval(this.taildropRequestTimer);
     }
-    if (this.taildropIncomingTimer >= 0) {
-      clearInterval(this.taildropIncomingTimer);
-    }
     // Request handling must not wait behind the status snapshot. That snapshot
     // can spend several seconds querying targets and inbox files.
     this.taildropRequestTimer = setInterval(() => {
       if (this.destroying || this.backendStopInFlight) {
         return;
       }
+      if (this.processBackendStopRequest()) {
+        return;
+      }
+      this.processPeerConnectivityRequest();
+      this.processSunshineProbeRequest();
+      this.processMediaServiceProbeRequest();
+      this.refreshTaildropIncomingNotification();
       this.processTaildropSendRequest();
       this.processTaildropCancelRequest();
       this.processTaildropReceiveRequest();
       this.processTaildriveQueryRequest();
       this.processTaildriveTransferRequest();
       this.processTaildriveControlRequest();
-    }, 100);
-    // The regular backend snapshot can wait on file-target and inbox queries.
-    // Keep receive notifications tied to the IPN-bus state so a fast transfer
-    // is visible before the full snapshot finishes.
-    this.taildropIncomingTimer = setInterval(() => {
-      this.refreshTaildropIncomingNotification();
-    }, 250);
+    }, VPN_REQUEST_INTERVAL_MS);
     this.refreshTaildropIncomingNotification();
     this.statusTimer = setInterval(() => {
       // Keep liveness independent from the full backend snapshot. File-target
@@ -975,12 +952,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
           this.writeStatus(snapshot.status);
           this.writePeerSnapshot(snapshot.peers);
           this.writeTaildropSnapshot(snapshot.taildrop);
-          this.processPeerConnectivityRequest();
-          this.processSunshineProbeRequest();
-          this.processMediaServiceProbeRequest();
-          this.processTaildropSendRequest();
-          this.processTaildropCancelRequest();
-          this.processTaildropReceiveRequest();
         })
         .catch(() => {
           if (this.destroying) {
@@ -998,7 +969,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         .finally(() => {
           this.statusUpdateInFlight = false;
         });
-    }, 1000);
+    }, VPN_STATUS_INTERVAL_MS);
   }
 
   private writePeerStatus(status: string): void {
@@ -1919,8 +1890,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   onDestroy(): void {
     this.destroying = true;
     this.stopNetworkMonitoring();
-    this.vpnBackgroundTask.onVpnDisconnected(this.context);
-    this.vpnBackgroundTask.unregister();
     this.recordDiagnosticEvent('vpn_extension_destroyed', 'lifecycle');
     this.stopBackendStopWatcher();
     if (this.statusTimer >= 0) {
@@ -1930,10 +1899,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     if (this.taildropRequestTimer >= 0) {
       clearInterval(this.taildropRequestTimer);
       this.taildropRequestTimer = -1;
-    }
-    if (this.taildropIncomingTimer >= 0) {
-      clearInterval(this.taildropIncomingTimer);
-      this.taildropIncomingTimer = -1;
     }
     const connection = this.vpnConnection;
     this.vpnConnection = undefined;

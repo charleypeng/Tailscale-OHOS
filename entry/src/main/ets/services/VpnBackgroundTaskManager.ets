@@ -5,14 +5,14 @@ import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { StoragePaths } from './StoragePaths';
 import { DiagnosticPrivacy } from './DiagnosticPrivacy';
+import { VPN_HEARTBEAT_FRESH_MS } from './VpnTiming';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'VpnBackgroundTask';
 const BUNDLE_NAME: string = 'io.github.tailscaleohos';
 const ENTRY_ABILITY_NAME: string = 'EntryAbility';
-const VPN_STATUS_FRESH_MS: number = 15000;
 const START_RETRY_INTERVAL_MS: number = 250;
-const START_RETRY_LIMIT: number = 20;
+const START_RETRY_LIMIT: number = 80;
 const HEALTH_CHECK_INTERVAL_MS: number = 5000;
 
 export class VpnBackgroundTaskManager {
@@ -84,25 +84,7 @@ export class VpnBackgroundTaskManager {
     this.stop(context);
   }
 
-  // The VPN Extension owns the TUN and the embedded Tailscale backend. Keep
-  // that process covered for the whole VPN session instead of tying coverage
-  // only to the foreground UI lifecycle.
-  onVpnConnected(context: common.Context): void {
-    this.isBackground = true;
-    const generation: number = ++this.lifecycleGeneration;
-    this.clearRetryTimer();
-    this.startWhenVpnActive(context, generation, 0);
-  }
-
-  onVpnDisconnected(context: common.Context): void {
-    this.isBackground = false;
-    this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
-    this.stop(context);
-  }
-
-  private startWhenVpnActive(context: common.Context,
+  private startWhenVpnActive(context: common.UIAbilityContext,
     generation: number, attempt: number): void {
     if (!this.isBackground || generation !== this.lifecycleGeneration ||
       this.isStarted || this.startInFlight || this.stopInFlight) {
@@ -123,7 +105,7 @@ export class VpnBackgroundTaskManager {
     }, START_RETRY_INTERVAL_MS);
   }
 
-  private async start(context: common.Context, generation: number): Promise<void> {
+  private async start(context: common.UIAbilityContext, generation: number): Promise<void> {
     this.startInFlight = true;
     try {
       const info: wantAgent.WantAgentInfo = {
@@ -155,10 +137,15 @@ export class VpnBackgroundTaskManager {
         businessError.code ?? -1, DiagnosticPrivacy.formatLogError(businessError));
     } finally {
       this.startInFlight = false;
+      // Foreground -> background may occur while WantAgent/start is pending.
+      // The stale attempt cleans itself up above, then serves the new lifecycle.
+      if (this.isBackground && generation !== this.lifecycleGeneration) {
+        this.startWhenVpnActive(context, this.lifecycleGeneration, 0);
+      }
     }
   }
 
-  private async stop(context: common.Context): Promise<void> {
+  private async stop(context: common.UIAbilityContext): Promise<void> {
     if (this.stopInFlight) {
       return;
     }
@@ -188,7 +175,7 @@ export class VpnBackgroundTaskManager {
     }
   }
 
-  private startHealthCheck(context: common.Context, generation: number): void {
+  private startHealthCheck(context: common.UIAbilityContext, generation: number): void {
     this.stopHealthCheck();
     this.healthTimer = setInterval(() => {
       if (!this.isBackground || generation !== this.lifecycleGeneration ||
@@ -212,7 +199,7 @@ export class VpnBackgroundTaskManager {
       }
       const heartbeatMs: number = Number(heartbeatMatch[1]);
       const ageMs: number = Date.now() - heartbeatMs;
-      if (heartbeatMs <= 0 || ageMs < 0 || ageMs > VPN_STATUS_FRESH_MS) {
+      if (heartbeatMs <= 0 || ageMs < 0 || ageMs > VPN_HEARTBEAT_FRESH_MS) {
         return false;
       }
       const normalized: string = status.toLowerCase();

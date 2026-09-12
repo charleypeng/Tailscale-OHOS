@@ -667,8 +667,8 @@ func classifyPeerDevice(osName, deviceModel string) string {
 	if containsAny(model, "mate x", "pocket", "magic v", "galaxy z fold", "galaxy z flip", "pixel fold", "foldable") {
 		return "foldable"
 	}
-	if containsAny(model, "ipad", "tablet", "matepad", "mediapad", "galaxy tab", "surface go", "surface pro", "pad ") ||
-		strings.HasSuffix(model, " pad") {
+	if containsAny(model, "ipad", "tablet", "matepad", "mediapad", "galaxy tab", "surface go", "surface pro") ||
+		containsToken(model, "pad") {
 		return "tablet"
 	}
 	if containsAny(model, "matebook", "macbook", "thinkpad", "notebook", "laptop", "chromebook") {
@@ -690,6 +690,15 @@ func classifyPeerDevice(osName, deviceModel string) string {
 func containsAny(value string, candidates ...string) bool {
 	for _, candidate := range candidates {
 		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsToken(value, token string) bool {
+	for _, field := range strings.Fields(value) {
+		if field == token {
 			return true
 		}
 	}

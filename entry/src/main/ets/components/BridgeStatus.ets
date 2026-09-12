@@ -1,3 +1,8 @@
+import {
+  VPN_HEARTBEAT_FRESH_MS,
+  VPN_HEARTBEAT_CONFIRM_TIMEOUT_MS,
+  VPN_SNAPSHOT_FRESH_MS
+} from '../services/VpnTiming';
 import nativeBridge from 'libtailscale_ohos.so';
 import { bundleManager, common, CompletionHandlerForAbilityStartCallback, Want } from '@kit.AbilityKit';
 import { BusinessError, deviceInfo, pasteboard } from '@kit.BasicServicesKit';
@@ -117,8 +122,6 @@ const CONNECTION_START_FRAME_DELAY_MS: number = 32;
 const CONNECTION_POLL_INTERVAL_MS: number = 250;
 const BACKEND_READINESS_POLL_INTERVAL_MS: number = 250;
 const CACHE_SIZE_POLL_INTERVAL_MS: number = 500;
-const VPN_HEARTBEAT_FRESH_MS: number = 5000;
-const VPN_HEARTBEAT_CONFIRM_TIMEOUT_MS: number = 2500;
 const VPN_CONNECTED_GRACE_MS: number = 8000;
 const FILE_WATCH_CLOSE_WRITE: number = 0x8;
 const FAST_RECONNECT_TTL_MS: number = 15000;
@@ -3107,7 +3110,7 @@ export struct BridgeStatus {
       const snapshot: PersistedPeerSnapshot = JSON.parse(
         fileIo.readTextSync(path)) as PersistedPeerSnapshot;
       const ageMs: number = Date.now() - snapshot.updatedAtMs;
-      if (snapshot.updatedAtMs <= 0 || ageMs < 0 || ageMs > 5000) {
+      if (snapshot.updatedAtMs <= 0 || ageMs < 0 || ageMs > VPN_SNAPSHOT_FRESH_MS) {
         return;
       }
       const validPeers: PeerSummary[] = snapshot.peers.filter(
@@ -3366,7 +3369,7 @@ export struct BridgeStatus {
       const snapshot: TaildropSnapshot = JSON.parse(fileIo.readTextSync(path)) as TaildropSnapshot;
       const updatedAtMs: number = snapshot.updatedAtMs === undefined ? 0 : snapshot.updatedAtMs;
       const ageMs: number = Date.now() - updatedAtMs;
-      if (updatedAtMs <= 0 || ageMs < 0 || ageMs > 5000) {
+      if (updatedAtMs <= 0 || ageMs < 0 || ageMs > VPN_SNAPSHOT_FRESH_MS) {
         this.taildropState = 'loading';
         return;
       }

@@ -97,6 +97,41 @@ for the parameter contract, privacy rules, and server-free engineering test.
 
 ## Build and real-device checks
 
+Host regression checks for network-change scheduling and VPN lifecycle logic:
+
+```bash
+node --test scripts/test-vpn-lifecycle.cjs
+```
+
+The tests use DevEco Studio's TypeScript compiler on macOS. Set
+`TYPESCRIPT_PATH` to your installed `typescript.js` on other setups. They execute
+the ArkTS service and VPN Extension methods with a simulated clock and mocked
+platform APIs; they do not replace an ArkTS/HAP build or physical-device tests.
+
+Network changes are coalesced for 750 ms with a 3-second maximum debounce wait,
+serialized with a minimum 3-second start interval, and retried at most three
+times after failure without a new network event. Events received during native
+work remain pending until it finishes. Shutdown cancels pending work.
+The UIAbility owns continuous-task requests; the VPN Extension does not call
+the UIAbility-only background-task API. This is not a guarantee that destroying
+the UI process preserves the VPN process; verify the OS VPN lifecycle on device.
+
+The Extension polls requests and incoming notifications every second, and
+refreshes its full snapshot and independent heartbeat every five seconds.
+Readers share freshness limits, including a longer cold-start heartbeat
+confirmation window. These changes reduce scheduled polling work, but measured
+standby battery savings and cellular reliability still require device testing:
+
+- Repeat Wi-Fi to cellular and cellular to Wi-Fi switches during traffic;
+  include airplane-mode recovery and a network that requires DERP relay.
+- Repeat with the screen off for 30 minutes, then overnight; check outbound
+  and inbound application traffic and recovery latency after waking.
+- Check background-task grant/cancellation and separately test swiping away
+  the UI; a persisted `Running` string alone is not proof of a live tunnel.
+- Compare equal-duration unplugged standby runs with VPN off/on under similar
+  signal strength. Record battery change, CPU time, wakeups and traffic volume;
+  avoid continuous pings during the power measurement.
+
 The application baseline is HarmonyOS 6.1 / SDK 23 for both compatible and
 target SDK versions. Run from PowerShell with one USB phone connected:
 
