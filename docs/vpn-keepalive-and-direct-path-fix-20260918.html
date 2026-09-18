@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tailscale-OHOS 保活与蜂窝直连修复报告（2026-09-18）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1a1d21; --muted:#5b6470;
+    --line:#e3e6ea; --accent:#1f6feb; --ok:#1a7f37; --warn:#9a6700; --bad:#b42318;
+    --code-bg:#f0f2f5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:980px;margin:0 auto;padding:40px 24px 72px}
+  h1{font-size:26px;line-height:1.3;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13.5px;margin-bottom:28px}
+  h2{font-size:19px;margin:36px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:15.5px;margin:22px 0 8px}
+  p{margin:10px 0}
+  code{background:var(--code-bg);padding:1.5px 5px;border-radius:4px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  pre{background:#0f1216;color:#e6edf3;padding:14px 16px;border-radius:8px;overflow-x:auto;
+    font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:12px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  .verdict{border-left:4px solid var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f5;font-weight:600}
+  .tag{display:inline-block;font-size:11.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);
+    background:#eef1f5;color:var(--muted);margin-right:6px}
+  .ok{color:var(--ok);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  ul{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  .meta{color:var(--muted);font-size:12.5px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:720px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Tailscale-OHOS：VPN 后台保活与蜂窝网直连修复</h1>
+  <div class="sub">
+    项目 <code>/Volumes/Doc/dev/Tailscale-OHOS</code>　·　2026-09-18　·　
+    依据：Tailscaler 已验证实现 + llmwiki 两个 concept 页
+  </div>
+
+  <div class="card verdict">
+    <strong>结论</strong>
+    <p>两项问题均已修复并通过构建验证：后台保活按华为官方 VPN 保活方案改为 <code>dataTransfer</code> 长时任务
+    并由 <code>EntryAbility</code> 持有；蜂窝直连补齐 netmon 鸿蒙适配（宿主上报默认网卡）并固定 UDP 端口 41641。
+    修复前这两条链路在本项目内<strong>完全不存在</strong>——不是配置偏差，而是功能缺失。</p>
+    <p class="meta">构建结果：<code>BUILD SUCCESSFUL</code>，产出 HAP 与 AArch64 Go 库。
+    真机验收未做，原因与命令见第 5 节。</p>
+  </div>
+
+  <h2>1. 修复前的实际状态</h2>
+  <table>
+    <thead><tr><th>问题</th><th>本项目的实际情况</th><th>后果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>长时任务业务类型</td>
+        <td><code>module.json5</code> 声明 <code>multiDeviceConnection</code>，代码申请
+            <code>MULTI_DEVICE_CONNECTION</code></td>
+        <td class="bad">业务类型不符，系统按 <code>reason=10</code> 取消/挂起 → 「用久了莫名被杀」</td>
+      </tr>
+      <tr>
+        <td>申请位置</td>
+        <td>在 <code>TailscaleVpnExtensionAbility</code> 里用 <code>VpnExtensionContext</code> 申请；
+            <code>EntryAbility</code> 里<strong>没有任何后台任务代码</strong></td>
+        <td class="bad">Stage 模型只允许 UIAbility 申请，请求本身不成立</td>
+      </tr>
+      <tr>
+        <td>任务维护</td>
+        <td>无进度刷新、无 <code>continuousTaskSuspend/Active</code> 监听</td>
+        <td class="bad">空闲期进度过期会被取消</td>
+      </tr>
+      <tr>
+        <td>声明完整性</td>
+        <td><code>KEEP_BACKGROUND_RUNNING</code> 无 <code>reason</code>/<code>usedScene</code></td>
+        <td class="warn">合规信息缺失</td>
+      </tr>
+      <tr>
+        <td>UDP 端口</td>
+        <td>未设置 <code>tsnet.Server.Port</code>，每次启动绑随机端口</td>
+        <td class="bad">运营商 NAT 每次分配新映射；magicsock 不宣告 hard-NAT 逃生候选</td>
+      </tr>
+      <tr>
+        <td>默认路由来源</td>
+        <td><code>third_party/tailscale</code> 完全没有 netmon 鸿蒙适配</td>
+        <td class="bad">沙箱内 <code>defIf=""</code>，rebind 空转，IPv6 打洞不收敛 → 长期走 DERP</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>2. 后台保活：改了什么</h2>
+  <div class="card">
+    <ul>
+      <li><code>entry/src/main/module.json5</code>：<code>backgroundModes</code> → <code>["dataTransfer"]</code>；
+          <code>KEEP_BACKGROUND_RUNNING</code> 补 <code>reason</code> + <code>usedScene(when: always)</code>。</li>
+      <li>新增字符串资源 <code>background_running_reason</code>（base 英文 / zh_CN 中文）。</li>
+      <li><code>services/VpnBackgroundTaskManager.ets</code>：重写为<strong>模块级单例</strong>
+          <code>vpnBackgroundTaskManager</code>，只接受 <code>UIAbilityContext</code>；DATA_TRANSFER 模式；
+          每 4 分钟 <code>updateBackgroundRunning</code> 刷新进度；监听
+          <code>continuousTaskCancel/Suspend/Active</code>；被取消后<strong>同一会话内不再重复申请</strong>（合规）。</li>
+      <li><code>entryability/EntryAbility.ets</code>：<code>onCreate</code> 注册监听并绑定上下文；
+          <code>onBackground</code> 申请任务；<code>onForeground</code> 在无会话时取消。</li>
+      <li><code>vpnextensionability/TailscaleVpnExtensionAbility.ets</code>：移除 4 处后台任务调用——
+          该进程没有 UIAbility，不可能持有长时任务，它只负责写状态文件。</li>
+      <li><code>components/BridgeStatus.ets</code>：<code>vpnStatus</code> 绑定
+          <code>@Watch('handleVpnStatusChanged')</code>，前台完成连接也能立刻武装保活任务。</li>
+    </ul>
+  </div>
+
+  <h3>对参考实现的两处修正</h3>
+  <p>移植时发现 Tailscaler 侧有两处实现在运行中不会生效，本项目已修正：
+  <span class="tag">Tailscaler 待修</span></p>
+  <div class="grid2">
+    <div class="card">
+      <strong>① <code>handleVpnStatusChanged</code> 漏绑 <code>@Watch</code></strong>
+      <p class="meta">方法定义了，但 <code>vpnStatus</code> 上没有 <code>@Watch</code> 装饰器，属死代码，
+      前台连接→切后台这条路径实际不生效。</p>
+    </div>
+    <div class="card">
+      <strong>② <code>scheduleSessionProbe</code> 从未被调用</strong>
+      <p class="meta">有界探测（24×500ms）写好了却没有调用点，
+      「点连接后立刻切后台」的竞态没有覆盖。本项目在 <code>onBackground</code> 接上。</p>
+    </div>
+  </div>
+
+  <h2>3. 蜂窝网直连：改了什么</h2>
+  <table>
+    <thead><tr><th>层</th><th>改动</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>上游 <code>net/netmon</code></td>
+        <td>新增 <code>harmony_os_openharmony.go</code> / <code>harmony_os_other.go</code>：用 build tag 提供编译期常量
+        <code>isHarmonyOS</code>。<strong>不能用 <code>runtime.GOOS == "openharmony"</code></strong>——OpenHarmony 工具链下该值实为
+        <code>"linux"</code>，判断恒假且不报错。</td>
+      </tr>
+      <tr>
+        <td>上游 <code>net/netmon/interfaces_linux.go</code></td>
+        <td><code>UpdateLastKnownDefaultRouteInterface</code>（宿主上报）+ <code>fallbackDefaultRoute</code>
+        + <code>guessHarmonyDefaultRouteInterface</code>；<code>defaultRoute()</code> 改为
+        <code>/proc/net/route → netlink → 上述回退</code> 链。</td>
+      </tr>
+      <tr>
+        <td>上游 <code>net/netmon/state.go</code></td>
+        <td><code>isHarmonyProblematicInterface</code>：过滤 IMS <code>rmnet_ims*</code>、运营商 anchor
+        <code>ancormnet*</code>、<code>vpn-tun</code> 与各类虚拟接口。</td>
+      </tr>
+      <tr>
+        <td>上游 <code>tsnet/tsnet.go</code></td>
+        <td>新增 <code>NotifyNetworkChange</code>：先 <code>mon.InjectEvent()</code> 等 netmon 重新采样，
+        再无条件 <code>DebugRebind()</code>。</td>
+      </tr>
+      <tr>
+        <td>Go 桥接 <code>backend.go</code></td>
+        <td><code>tsnet.Server</code> 加 <code>Port: 41641</code>；新增 <code>setDefaultRouteInterface()</code>；
+        <code>networkChanged()</code> 从 <code>client.DebugAction("rebind")</code> 改走
+        <code>NotifyNetworkChange</code> 并附带 <code>NetworkDiagnostics</code>。</td>
+      </tr>
+      <tr>
+        <td>NAPI</td>
+        <td><code>backendSetDefaultRouteInterface</code>：<code>napi_init.cpp</code> + <code>index.d.ts</code>
+        + <code>main.go</code> 导出 <code>TSBackendSetDefaultRouteInterface</code>。</td>
+      </tr>
+      <tr>
+        <td>ArkTS 上报</td>
+        <td><code>networkPropertiesCallback</code> 取 <code>connectionProperties.interfaceName</code>，
+        经 <code>isPhysicalNetworkInterface()</code> 白名单过滤后缓存；在
+        <code>rebindForNetworkChange</code> 里<strong>先推送网卡名、再触发网络变化通知</strong>。</td>
+      </tr>
+      <tr>
+        <td>补丁同步</td>
+        <td><code>patches/tailscale-ohos.patch</code> 重新生成（840 行 / 10 文件）。
+        构建脚本用 <code>git apply --reverse --check</code> 判定，patch 与源码不一致会直接在打补丁阶段失败。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="card">
+    <strong>为什么顺序不能反</strong>
+    <p><code>UpdateLastKnownDefaultRouteInterface</code> 只写一个变量。netmon 的缓存状态是在
+    <code>InjectEvent()</code> 触发重新采样时才重算的；先推送、后通知，magicsock 在 rebind 时才读得到
+    这个网卡名。反过来的话名字写进去了但没有一次重采样把它带进缓存。</p>
+  </div>
+
+  <h2>4. 验证证据（可复现）</h2>
+  <table>
+    <thead><tr><th>项</th><th>命令 / 位置</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>构建</td>
+        <td><code>bash scripts/build-macos.sh</code></td>
+        <td class="ok">BUILD SUCCESSFUL；HAP + <code>libtailscale_go.so</code> 产出</td>
+      </tr>
+      <tr>
+        <td>声明位值</td>
+        <td><code>unzip -p &lt;hap&gt; module.json</code></td>
+        <td class="ok"><code>backgroundModes = ['dataTransfer']</code>；权限带 reason/usedScene</td>
+      </tr>
+      <tr>
+        <td>导出符号</td>
+        <td><code>grep TSBackendSetDefaultRouteInterface libtailscale_go.h</code></td>
+        <td class="ok"><code>libtailscale_go.h:97</code> 已声明</td>
+      </tr>
+      <tr>
+        <td>补丁一致性</td>
+        <td><code>git -C third_party/tailscale apply --reverse --check …</code></td>
+        <td class="ok">通过</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>5. 未完成：真机验收</h2>
+  <div class="card">
+    <p><span class="bad">阻塞项</span>　签名材料缺失。本项目 <code>certs/</code> 只有 3 个 release 证书，
+    <strong>没有 p12 私钥与 p7b profile</strong>；设备上现有的两个 debug profile 分别绑定
+    <code>com.penglei.tailscaler</code> 与 <code>com.penglei.hermex</code>，都不匹配本项目包名
+    <code>io.github.tailscaleohos</code>，因此无法命令行签名安装。</p>
+    <p>需在 DevEco Studio 里为本包名申请 debug profile（或导入已有签名配置到
+    <code>build-profile.json5</code> 的 <code>signingConfigs</code>）后，按下表验收：</p>
+    <pre># 0) 安装（签名后）
+hdc install -r entry/build/default/outputs/default/entry-default-signed.hap
+
+# 1) 声明是否生效：期望 backgroundModes 位值为 1（= DATA_TRANSFER）
+hdc shell bm dump -n io.github.tailscaleohos | grep -i backgroundModes
+
+# 2) 连接后回桌面：通知栏应出现「正在运行数据传输任务」
+#    长跑期间任务保持/刷新日志：
+hdc shell hilog | grep VpnBackgroundTask
+
+# 3) 蜂窝直连：期望 defIf 由 "" 变为 rmnet0、端点出现 stun4localport、路径变 direct
+hdc shell hilog | grep -E "network change|network_default_route|Rebind"</pre>
+    <p class="meta">真机上「连接后锁屏 8–24 小时不掉线」与「Wi-Fi ↔ 蜂窝切换后延迟」两项仍需实测；
+    本报告的结论边界止于构建与静态产物验证。</p>
+  </div>
+
+  <h2>6. 改动文件清单</h2>
+  <table>
+    <thead><tr><th>文件</th><th>类型</th></tr></thead>
+    <tbody>
+      <tr><td><code>entry/src/main/module.json5</code></td><td>改</td></tr>
+      <tr><td><code>entry/src/main/resources/{base,zh_CN}/element/string.json</code></td><td>改</td></tr>
+      <tr><td><code>entry/src/main/ets/services/VpnBackgroundTaskManager.ets</code></td><td>重写</td></tr>
+      <tr><td><code>entry/src/main/ets/entryability/EntryAbility.ets</code></td><td>改</td></tr>
+      <tr><td><code>entry/src/main/ets/vpnextensionability/TailscaleVpnExtensionAbility.ets</code></td><td>改</td></tr>
+      <tr><td><code>entry/src/main/ets/components/BridgeStatus.ets</code></td><td>改</td></tr>
+      <tr><td><code>native/go_bridge/backend.go</code></td><td>改</td></tr>
+      <tr><td><code>native/go_bridge/main.go</code></td><td>改</td></tr>
+      <tr><td><code>entry/src/main/cpp/napi_init.cpp</code>、<code>cpp/types/libtailscale_ohos/index.d.ts</code></td><td>改</td></tr>
+      <tr><td><code>third_party/tailscale/net/netmon/{harmony_os_openharmony,harmony_os_other}.go</code></td><td>新增</td></tr>
+      <tr><td><code>third_party/tailscale/net/netmon/{interfaces_linux,state}.go</code>、<code>tsnet/tsnet.go</code></td><td>改</td></tr>
+      <tr><td><code>patches/tailscale-ohos.patch</code></td><td>重新生成</td></tr>
+      <tr><td><code>STATUS.md</code></td><td>改</td></tr>
+    </tbody>
+  </table>
+
+  <p class="meta" style="margin-top:28px">
+    本报告为单文件、无外部依赖，可离线打开。依据来源：华为 FAQ《应用切换到后台后 VPN 功能保活的解决方案》、
+    《长时任务》约束与限制、SDK <code>@ohos.resourceschedule.backgroundTaskManager.d.ts</code>；
+    参考实现为 Tailscaler 工作区改动（未提交）。
+  </p>
+
+</div>
+</body>
+</html>

@@ -1,5 +1,15 @@
 # Status
 
+## 2026-09-18 - VPN background keep-alive and cellular direct-path fixes
+
+- Replaced the `multiDeviceConnection` background mode with `dataTransfer` and gave `KEEP_BACKGROUND_RUNNING` a `reason` plus `usedScene`, matching Huawei's VPN keep-alive guidance. The VPN extension process is frozen or killed in the background while the app declares a distributed multi-device business it does not run.
+- Rewrote `VpnBackgroundTaskManager` as a module-level singleton that only accepts a `UIAbilityContext`, is driven by `EntryAbility` (`onCreate`/`onBackground`/`onForeground`), refreshes the `dataTransfer` task every four minutes, observes `continuousTaskCancel`/`continuousTaskSuspend`/`continuousTaskActive`, and does not re-request the task within the session that the user or the system cancelled. The VPN extension no longer requests a continuous task at all, because a `VpnExtensionContext` cannot own one; its status file is the only channel it has.
+- Bound `BridgeStatus.vpnStatus` to a `@Watch` handler so a session that starts while the UI is foregrounded also arms the keep-alive task, and added the bounded session probe that covers connecting and backgrounding the app in the same moment.
+- Pinned the engine's UDP port to 41641 through `tsnet.Server.Port`, so the carrier NAT keeps a stable external mapping and magicsock can offer its `<public IP>:<local port>` hard-NAT candidate.
+- Added the HarmonyOS netmon port: `UpdateLastKnownDefaultRouteInterface` with a `/proc/net/route` -> netlink -> host-hint fallback chain, a build-tag-driven `isHarmonyOS` constant (`runtime.GOOS` is `"linux"` under OpenHarmony, so the obvious runtime comparison is silently dead), and interface filtering for the IMS, operator-anchor, and virtual bearers. The VPN extension reports `ConnectionProperties.interfaceName` through a new `backendSetDefaultRouteInterface` NAPI call before it triggers a network-change notification, and `networkChanged()` routes through `tsnet.NotifyNetworkChange`, which resamples netmon before rebinding.
+- Regenerated `patches/tailscale-ohos.patch` (10 files) so the build's reverse-check stays consistent with the tree.
+- Verification: `scripts/build-macos.sh` completed successfully and produced the HAP plus the AArch64 Go library. The packaged `module.json` reports `backgroundModes: ["dataTransfer"]` and a `KEEP_BACKGROUND_RUNNING` entry carrying `reason`/`usedScene`; the CGO header exports `TSBackendSetDefaultRouteInterface`. On-device acceptance (long-task notification, multi-hour idle survival, cellular handover latency) still needs a debug profile for `io.github.tailscaleohos`.
+
 ## 2026-08-11 - Files immersive title-bar actions and toolbar spacing
 
 - Kept Settings on the scroll-linked `HdsNavigationTitleMode.FREE` mode and moved the Files multi-select and search actions into the large Files HDS title bar.

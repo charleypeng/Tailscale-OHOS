@@ -30,6 +30,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -284,6 +285,33 @@ const (
 	taildropMaxSendFiles    = 100
 )
 
+// magicsockDebugWindow is how long magicsock's verbose discovery logging stays
+// on after a probe or a physical-network change. Verbose discovery covers every
+// peer, so it is bounded rather than always-on.
+const magicsockDebugWindow = 90 * time.Second
+
+// tailscaleListenPort pins the UDP port that carries WireGuard and disco
+// traffic to the IANA-assigned WireGuard port, which is also what every
+// official Tailscale client uses. Leaving the port to the engine means
+// magicsock binds an arbitrary free port on every start, and that has three
+// concrete costs on a hard-NAT (carrier) network:
+//
+//  1. Every restart and every rebind produces a different 5-tuple, so the
+//     carrier NAT allocates a fresh external mapping each time and no peer can
+//     keep a stable address for us.
+//  2. magicsock only offers the "<public IP>:<local port>" candidate to peers
+//     when it knows its own fixed port, because that candidate trades on the
+//     user having mapped the same port through the router (see
+//     magicsock.Conn.determineEndpoints). With a random port there is nothing
+//     worth announcing.
+//  3. Our own phone is reachable from the cellular network at the same
+//     <public IPv6>:41641 in the working comparison case, so a stable port
+//     restores the rendezvous point that a peer on the home network can use.
+//
+// magicsock still falls back to an ephemeral port when this one is busy, so
+// pinning it cannot make the engine fail to start.
+const tailscaleListenPort = 41641
+
 type taildropProgressReader struct {
 	reader io.Reader
 	onRead func(int)
@@ -406,6 +434,7 @@ func (b *backendController) startWithDevice(stateDir, deviceModel, controlURL st
 		Hostname:               harmonyHostname(trimmedModel),
 		ControlURL:             normalizedControlURL,
 		Ephemeral:              false,
+		Port:                   tailscaleListenPort,
 		UserLogf:               b.userLogf,
 		Logf:                   b.backendLogf,
 		UseNetstackForPeerDial: device != nil,
@@ -2668,27 +2697,70 @@ func (b *backendController) status() string {
 	return b.formatRunningStatus(status, prefs, prefsErr)
 }
 
+// setDefaultRouteInterface records the interface that currently carries the
+// default route, as resolved by the HarmonyOS network manager.
+//
+// The engine cannot work this out on its own. Inside the VPN application
+// sandbox /proc/net/route is reduced to the process's own routes (no default
+// entry) and AF_NETLINK route dumps are denied, so netmon's DefaultRouteInterface
+// stays empty. magicsock reads that field during Rebind to decide whether the
+// DERP connections the previous network owned should be torn down, so an empty
+// value leaves relay paths pointing at a network that no longer exists.
+//
+// The VPN extension already resolves the physical network -- it filters out
+// VPN and non-INTERNET networks and reads ConnectionProperties for the very
+// same snapshot -- so it reports the interface name here. Recording the hint is
+// enough: the caller follows up with a network-change notification, which makes
+// netmon recompute its cached state and pick the name up.
+func (b *backendController) setDefaultRouteInterface(ifName string) string {
+	trimmed := strings.TrimSpace(ifName)
+	netmon.UpdateLastKnownDefaultRouteInterface(trimmed)
+	if trimmed == "" {
+		return "OK | default route | cleared"
+	}
+	return fmt.Sprintf("OK | default route | interface=%s", trimmed)
+}
+
 // networkChanged forces magicsock to move its UDP sockets to the current
 // physical network and immediately refresh its STUN endpoints. OpenHarmony is
 // built with Linux tags, but its application sandbox does not reliably deliver
 // the netlink events that upstream netmon expects when Wi-Fi and cellular
 // networks switch.
+//
+// It goes through tsnet's own network-change notification instead of a bare
+// rebind, because that path makes netmon resample the host interfaces first.
+// The resample is what makes the interface name published by
+// setDefaultRouteInterface visible to the cached netmon state that magicsock
+// reads while rebinding.
 func (b *backendController) networkChanged() string {
 	b.mu.Lock()
-	client := b.client
+	server := b.server
 	b.mu.Unlock()
-	if client == nil {
+	if server == nil {
 		return "FAILED | network change | backend unavailable"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := client.DebugAction(ctx, "rebind"); err != nil {
-		return "FAILED | network change | rebind failed"
+	// A physical-network change is when discovery re-runs from scratch, so the
+	// verbose path trace is worth having for a bounded window from here on.
+	server.SetMagicsockDebugLogging(true)
+	time.AfterFunc(magicsockDebugWindow, func() {
+		server.SetMagicsockDebugLogging(false)
+	})
+	explicitRebind, err := server.NotifyNetworkChange(ctx)
+	if err != nil {
+		return "FAILED | network change | state refresh failed | errorStage=netmon"
 	}
-	if err := client.DebugAction(ctx, "restun"); err != nil {
-		return "FAILED | network change | restun failed"
+	b.mu.Lock()
+	current := b.server == server
+	b.mu.Unlock()
+	if !current {
+		return "FAILED | network change | stale backend | errorStage=generation"
 	}
-	return "OK | network change | UDP rebound and endpoints refreshed"
+	// The transition itself is the only moment where the local NAT verdict
+	// matters, so publish it together with the rebind result.
+	return fmt.Sprintf("OK | network change | stateRefreshed=true | rebindIssued=%t | %s",
+		explicitRebind, server.NetworkDiagnostics(ctx))
 }
 
 func (b *backendController) formatRunningStatus(

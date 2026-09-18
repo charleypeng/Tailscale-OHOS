@@ -12,6 +12,7 @@ import { notificationManager } from '@kit.NotificationKit';
 import { APP_FOREGROUND_EVENT } from '../services/AppLifecycleEvents';
 import { AppShellFeatureAction, AppShellIntentAdapter } from '../services/AppShellIntentAdapter';
 import { DiagnosticPrivacy } from '../services/DiagnosticPrivacy';
+import { vpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
 import { WindowEnvironment } from '../services/WindowEnvironment';
 
 const DOMAIN = 0x0000;
@@ -55,6 +56,11 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     this.handleTaildropNotificationWant(want);
+    // A Stage-model continuous task can only be owned by a UIAbility. The VPN
+    // extension process reports the tunnel state through its status file, and
+    // this manager is the only place allowed to request the background task.
+    vpnBackgroundTaskManager.register();
+    vpnBackgroundTaskManager.attachAbilityContext(this.context);
     hilog.info(DOMAIN, TAG, 'EntryAbility onCreate. ability=%{public}s reason=%{public}d',
       want.abilityName ?? '', launchParam.launchReason);
   }
@@ -110,10 +116,15 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     this.applyEdgeToEdge(this.context.config.colorMode);
     this.context.eventHub.emit(APP_FOREGROUND_EVENT);
+    vpnBackgroundTaskManager.onForeground(this.context);
     hilog.info(DOMAIN, TAG, 'EntryAbility onForeground');
   }
 
   onBackground(): void {
+    // Huawei's official VPN keep-alive guidance starts the continuous task from
+    // this callback so the VPN extension process is not frozen or killed while
+    // the UI is not visible.
+    vpnBackgroundTaskManager.onBackground(this.context);
     hilog.info(DOMAIN, TAG, 'EntryAbility onBackground');
   }
 

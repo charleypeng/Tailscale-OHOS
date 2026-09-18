@@ -11,28 +11,77 @@ const TAG: string = 'VpnBackgroundTask';
 const BUNDLE_NAME: string = 'io.github.tailscaleohos';
 const ENTRY_ABILITY_NAME: string = 'EntryAbility';
 const VPN_STATUS_FRESH_MS: number = 15000;
-const START_RETRY_INTERVAL_MS: number = 250;
-const START_RETRY_LIMIT: number = 20;
 const HEALTH_CHECK_INTERVAL_MS: number = 5000;
+// A DATA_TRANSFER continuous task is cancelled when its progress is not
+// refreshed for a long time, and it can also be suspended when the observed
+// throughput stays low (system reasons 4 for both). A VPN link is bursty and
+// often idle, so refresh the task well inside the documented window instead of
+// letting the system decide the link has finished.
+const PROGRESS_REFRESH_INTERVAL_MS: number = 240000;
+// A bounded probe covers the connect-then-immediately-background race: the
+// status file may still be empty when onBackground runs while the VPN extension
+// finishes bringing the tunnel up a moment later.
+const SESSION_PROBE_INTERVAL_MS: number = 500;
+const SESSION_PROBE_LIMIT: number = 24;
+// Huawei's official VPN keep-alive guidance ("应用切换到后台后VPN功能保活的解决方案")
+// prescribes the dataTransfer background mode, and the module manifest declares
+// the same value. multiDeviceConnection was cancelled by the system with
+// reason 10 (not using multi-device capabilities) because this app is not a
+// distributed multi-device service.
+const CONTINUOUS_TASK_MODE: string = 'dataTransfer';
+const CONTINUOUS_TASK_MODE_ENUM: backgroundTaskManager.BackgroundMode =
+  backgroundTaskManager.BackgroundMode.DATA_TRANSFER;
+const CANCEL_REASON_USER_REMOVE_NOTIFICATION: number = 3;
+const CANCEL_REASON_USER_CANCEL: number = 1;
 
 export class VpnBackgroundTaskManager {
-  private isBackground: boolean = false;
-  private isStarted: boolean = false;
-  private startInFlight: boolean = false;
-  private stopInFlight: boolean = false;
+  // Stage-model continuous tasks can only be requested by a UIAbility
+  // (Background Tasks Kit "长时任务 > 约束与限制"). A VpnExtensionContext cannot
+  // own one, so the VPN extension process relies on the task owned here.
+  private abilityContext?: common.UIAbilityContext;
+  private sessionActive: boolean = false;
+  private appBackground: boolean = false;
+  private starting: boolean = false;
+  private started: boolean = false;
+  private stopping: boolean = false;
   private listenerRegistered: boolean = false;
-  private lifecycleGeneration: number = 0;
-  private retryTimer: number = -1;
+  private generation: number = 0;
   private healthTimer: number = -1;
+  private progressTimer: number = -1;
+  private retryTimer: number = -1;
+  // Set when the user or the system cancels the task. Re-applying immediately
+  // after such a cancellation violates the Background Tasks Kit rules, so the
+  // next user-initiated VPN session is required before a new request.
+  private suppressedReason: number = -1;
+  private missingContextLogged: boolean = false;
 
   private readonly cancelCallback =
     (info: backgroundTaskManager.ContinuousTaskCancelInfo): void => {
-      this.isStarted = false;
-      this.startInFlight = false;
-      this.stopHealthCheck();
+      this.started = false;
+      this.stopTimers();
+      this.suppressedReason = typeof info.reason === 'number' ? Number(info.reason) : -1;
+      this.generation++;
       hilog.info(DOMAIN, TAG,
-        'VPN background task cancelled by system. id=%{public}d reason=%{public}d',
-        info.id, info.reason);
+        'Continuous task cancelled. id=%{public}d reason=%{public}d suppressed=%{public}t',
+        info.id, this.suppressedReason,
+        this.suppressedReason === CANCEL_REASON_USER_REMOVE_NOTIFICATION ||
+          this.suppressedReason === CANCEL_REASON_USER_CANCEL);
+    };
+
+  private readonly suspendCallback =
+    (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
+      // A suspend keeps the task but pauses its protection; the periodic
+      // progress refresh is what brings it back for a dataTransfer task.
+      hilog.info(DOMAIN, TAG,
+        'Continuous task suspend state changed. id=%{public}d suspended=%{public}t reason=%{public}d',
+        info.continuousTaskId, info.suspendState, info.suspendReason ?? -1);
+    };
+
+  private readonly activeCallback =
+    (info: backgroundTaskManager.ContinuousTaskActiveInfo): void => {
+      this.started = true;
+      this.suppressedReason = -1;
+      hilog.info(DOMAIN, TAG, 'Continuous task active. id=%{public}d', info.id);
     };
 
   register(): void {
@@ -48,85 +97,152 @@ export class VpnBackgroundTaskManager {
         'Failed to register continuous-task cancellation listener. code=%{public}d',
         businessError.code ?? -1);
     }
+    try {
+      backgroundTaskManager.on('continuousTaskSuspend', this.suspendCallback);
+    } catch (_error) {
+      // API 20+ event; older system images have no suspension signal.
+    }
+    try {
+      backgroundTaskManager.on('continuousTaskActive', this.activeCallback);
+    } catch (_error) {
+      // API 20+ event; older system images have no activation signal.
+    }
   }
 
   unregister(): void {
-    this.isBackground = false;
-    this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
+    this.sessionActive = false;
+    this.generation++;
+    this.stopTimers();
     if (!this.listenerRegistered) {
       return;
     }
     try {
       backgroundTaskManager.off('continuousTaskCancel', this.cancelCallback);
+      backgroundTaskManager.off('continuousTaskSuspend', this.suspendCallback);
+      backgroundTaskManager.off('continuousTaskActive', this.activeCallback);
     } catch (error) {
       const businessError = error as BusinessError;
       hilog.warn(DOMAIN, TAG,
-        'Failed to unregister continuous-task cancellation listener. code=%{public}d',
+        'Failed to unregister continuous-task listeners. code=%{public}d',
         businessError.code ?? -1);
     }
     this.listenerRegistered = false;
   }
 
+  // The UIAbility is the only context allowed to own a continuous task, so the
+  // page and the ability hand their UIAbilityContext in here.
+  attachAbilityContext(context: common.UIAbilityContext): void {
+    this.abilityContext = context;
+    this.missingContextLogged = false;
+    this.sync();
+  }
+
+  // Called from the VPN extension process. That process has no UIAbility, so it
+  // only publishes the session state through the shared status file; the ability
+  // process performs the actual request.
+  onVpnConnected(context: common.Context): void {
+    this.sessionActive = true;
+    this.suppressedReason = -1;
+    if (this.abilityContext === undefined && context.filesDir.length > 0) {
+      this.missingContextLogged = true;
+    }
+    this.sync();
+  }
+
+  onVpnDisconnected(_context: common.Context): void {
+    this.sessionActive = false;
+    const generation: number = this.generation;
+    this.generation++;
+    this.stopTimers();
+    this.stop(generation + 1);
+  }
+
   onBackground(context: common.UIAbilityContext): void {
-    this.isBackground = true;
-    const generation: number = ++this.lifecycleGeneration;
-    this.clearRetryTimer();
-    this.startWhenVpnActive(context, generation, 0);
+    this.appBackground = true;
+    this.attachAbilityContext(context);
+    // Fall back to the shared VPN status file: the UI process may have been
+    // created after the VPN session started.
+    if (!this.sessionActive && this.hasLiveVpnStatus(context.filesDir)) {
+      this.sessionActive = true;
+      this.suppressedReason = -1;
+    }
+    this.sync();
+    // The session may not be observable yet when the user backgrounds the app
+    // right after tapping connect. Probe for a bounded window instead of
+    // waiting for the next foreground transition.
+    if (!this.sessionActive) {
+      this.scheduleSessionProbe(context, 0);
+    }
   }
 
   onForeground(context: common.UIAbilityContext): void {
-    this.isBackground = false;
-    this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
-    this.stop(context);
-  }
-
-  // The VPN Extension owns the TUN and the embedded Tailscale backend. Keep
-  // that process covered for the whole VPN session instead of tying coverage
-  // only to the foreground UI lifecycle.
-  onVpnConnected(context: common.Context): void {
-    this.isBackground = true;
-    const generation: number = ++this.lifecycleGeneration;
-    this.clearRetryTimer();
-    this.startWhenVpnActive(context, generation, 0);
-  }
-
-  onVpnDisconnected(context: common.Context): void {
-    this.isBackground = false;
-    this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
-    this.stop(context);
-  }
-
-  private startWhenVpnActive(context: common.Context,
-    generation: number, attempt: number): void {
-    if (!this.isBackground || generation !== this.lifecycleGeneration ||
-      this.isStarted || this.startInFlight || this.stopInFlight) {
-      return;
+    this.appBackground = false;
+    this.stopSessionProbe();
+    this.attachAbilityContext(context);
+    if (!this.sessionActive) {
+      this.stop(this.generation + 1);
     }
-    if (this.hasLiveVpnStatus(context.filesDir)) {
-      this.start(context, generation);
-      return;
-    }
-    if (attempt >= START_RETRY_LIMIT) {
-      hilog.info(DOMAIN, TAG,
-        'VPN background task not started because no live VPN session was detected');
+  }
+
+  isTaskActive(): boolean {
+    return this.started;
+  }
+
+  // A bounded probe covers the connect-then-immediately-background race: the
+  // status file may still be empty when onBackground runs, while the VPN
+  // extension finishes bringing the tunnel up a moment later.
+  private scheduleSessionProbe(context: common.UIAbilityContext, attempt: number): void {
+    if (attempt >= SESSION_PROBE_LIMIT || this.sessionActive) {
       return;
     }
     this.retryTimer = setTimeout(() => {
       this.retryTimer = -1;
-      this.startWhenVpnActive(context, generation, attempt + 1);
-    }, START_RETRY_INTERVAL_MS);
+      if (this.sessionActive || !this.appBackground) {
+        return;
+      }
+      if (this.hasLiveVpnStatus(context.filesDir)) {
+        this.sessionActive = true;
+        this.suppressedReason = -1;
+        this.sync();
+        return;
+      }
+      this.scheduleSessionProbe(context, attempt + 1);
+    }, SESSION_PROBE_INTERVAL_MS);
   }
 
-  private async start(context: common.Context, generation: number): Promise<void> {
-    this.startInFlight = true;
+  private sync(): void {
+    const context: common.UIAbilityContext | undefined = this.abilityContext;
+    if (context === undefined) {
+      // Nothing to do yet. The VPN extension process reaches this path on every
+      // status update, so only report it once per process.
+      if (this.sessionActive && !this.missingContextLogged) {
+        this.missingContextLogged = true;
+        hilog.info(DOMAIN, TAG,
+          'Continuous task waits for the UIAbility context that must own it');
+      }
+      return;
+    }
+    if (!this.sessionActive) {
+      this.stop(this.generation + 1);
+      return;
+    }
+    this.start(context, this.generation);
+  }
+
+  private async start(context: common.UIAbilityContext, generation: number): Promise<void> {
+    if (this.started || this.starting || this.stopping) {
+      return;
+    }
+    if (this.suppressedReason >= 0) {
+      hilog.info(DOMAIN, TAG,
+        'Continuous task stays cancelled until the next VPN session. reason=%{public}d',
+        this.suppressedReason);
+      return;
+    }
+    this.starting = true;
+    const requestGeneration: number = generation;
     try {
-      const info: wantAgent.WantAgentInfo = {
+      const agent: WantAgent = await wantAgent.getWantAgent({
         wants: [{
           bundleName: BUNDLE_NAME,
           abilityName: ENTRY_ABILITY_NAME
@@ -134,73 +250,102 @@ export class VpnBackgroundTaskManager {
         actionType: wantAgent.OperationType.START_ABILITY,
         requestCode: 1001,
         actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
-      };
-      const agent: WantAgent = await wantAgent.getWantAgent(info);
-      if (!this.isBackground || generation !== this.lifecycleGeneration) {
+      });
+      if (requestGeneration !== this.generation || !this.sessionActive) {
         return;
       }
       await backgroundTaskManager.startBackgroundRunning(
-        context, backgroundTaskManager.BackgroundMode.MULTI_DEVICE_CONNECTION, agent);
-      if (!this.isBackground || generation !== this.lifecycleGeneration) {
+        context, CONTINUOUS_TASK_MODE_ENUM, agent);
+      if (requestGeneration !== this.generation || !this.sessionActive) {
         await backgroundTaskManager.stopBackgroundRunning(context);
         return;
       }
-      this.isStarted = true;
-      this.startHealthCheck(context, generation);
-      hilog.info(DOMAIN, TAG, 'VPN MULTI_DEVICE_CONNECTION background task started');
+      this.started = true;
+      this.startHealthCheck(context, requestGeneration);
+      this.startProgressRefresh(context, requestGeneration);
+      hilog.info(DOMAIN, TAG,
+        'VPN background continuous task started. mode=%{public}s', CONTINUOUS_TASK_MODE);
     } catch (error) {
       const businessError = error as BusinessError;
+      const code: number = businessError.code ?? -1;
+      // 9800005/9800006 mean the request itself was rejected (mode/business
+      // mismatch or notification rejected). Retrying those in a loop is what
+      // the Background Tasks Kit rules forbid, so record and wait for the next
+      // user-initiated session instead.
+      if (code === 9800005 || code === 9800006 || code === 201 || code === 401) {
+        this.suppressedReason = code;
+      }
       hilog.error(DOMAIN, TAG,
-        'Failed to start VPN background task. code=%{public}d %{public}s',
-        businessError.code ?? -1, DiagnosticPrivacy.formatLogError(businessError));
+        'Failed to start VPN background continuous task. code=%{public}d %{public}s',
+        code, DiagnosticPrivacy.formatLogError(businessError));
     } finally {
-      this.startInFlight = false;
+      this.starting = false;
     }
   }
 
-  private async stop(context: common.Context): Promise<void> {
-    if (this.stopInFlight) {
+  private async stop(generation: number): Promise<void> {
+    if (this.stopping || (!this.started && !this.starting)) {
       return;
     }
-    this.stopInFlight = true;
+    const context: common.UIAbilityContext | undefined = this.abilityContext;
+    if (context === undefined) {
+      return;
+    }
+    this.stopping = true;
+    this.generation = Math.max(this.generation, generation);
+    this.stopTimers();
     try {
-      const tasks: backgroundTaskManager.ContinuousTaskInfo[] =
-        await backgroundTaskManager.getAllContinuousTasks(context, false);
-      const hasEntryTask: boolean =
-        tasks.some((task: backgroundTaskManager.ContinuousTaskInfo) =>
-          task.abilityName === ENTRY_ABILITY_NAME);
-      if (!this.isStarted && !hasEntryTask) {
-        return;
-      }
+      // Only stop the task this manager owns; the VPN extension has no task of
+      // its own to cancel, and stopBackgroundRunning also drops unrelated
+      // continuous tasks of the same ability.
       await backgroundTaskManager.stopBackgroundRunning(context);
-      this.isStarted = false;
-      hilog.info(DOMAIN, TAG, 'VPN MULTI_DEVICE_CONNECTION background task stopped');
+      this.started = false;
+      hilog.info(DOMAIN, TAG, 'VPN background continuous task stopped');
     } catch (error) {
       const businessError = error as BusinessError;
       hilog.warn(DOMAIN, TAG,
-        'Failed to stop VPN background task. code=%{public}d %{public}s',
+        'Failed to stop VPN background continuous task. code=%{public}d %{public}s',
         businessError.code ?? -1, DiagnosticPrivacy.formatLogError(businessError));
+      this.started = false;
     } finally {
-      this.stopInFlight = false;
-      if (this.isBackground) {
-        this.startWhenVpnActive(context, this.lifecycleGeneration, 0);
+      this.stopping = false;
+      if (this.sessionActive && this.suppressedReason < 0) {
+        this.sync();
       }
     }
   }
 
-  private startHealthCheck(context: common.Context, generation: number): void {
+  private startHealthCheck(context: common.UIAbilityContext, generation: number): void {
     this.stopHealthCheck();
     this.healthTimer = setInterval(() => {
-      if (!this.isBackground || generation !== this.lifecycleGeneration ||
-        !this.isStarted) {
+      if (generation !== this.generation || !this.started) {
         this.stopHealthCheck();
         return;
       }
       if (!this.hasLiveVpnStatus(context.filesDir)) {
         this.stopHealthCheck();
-        this.stop(context);
+        this.sessionActive = false;
+        this.stop(this.generation + 1);
       }
     }, HEALTH_CHECK_INTERVAL_MS);
+  }
+
+  // Refreshing the running task keeps a DATA_TRANSFER continuous task from
+  // being cancelled for stale progress while the tunnel is up but idle.
+  private startProgressRefresh(context: common.UIAbilityContext, generation: number): void {
+    this.stopProgressRefresh();
+    this.progressTimer = setInterval(() => {
+      if (generation !== this.generation || !this.started) {
+        this.stopProgressRefresh();
+        return;
+      }
+      backgroundTaskManager.updateBackgroundRunning(context, [CONTINUOUS_TASK_MODE])
+        .catch((error: BusinessError) => {
+          hilog.warn(DOMAIN, TAG,
+            'Failed to refresh VPN continuous task progress. code=%{public}d',
+            error.code ?? -1);
+        });
+    }, PROGRESS_REFRESH_INTERVAL_MS);
   }
 
   private hasLiveVpnStatus(filesDir: string): boolean {
@@ -232,7 +377,13 @@ export class VpnBackgroundTaskManager {
     }
   }
 
-  private clearRetryTimer(): void {
+  private stopTimers(): void {
+    this.stopHealthCheck();
+    this.stopProgressRefresh();
+    this.stopSessionProbe();
+  }
+
+  private stopSessionProbe(): void {
     if (this.retryTimer >= 0) {
       clearTimeout(this.retryTimer);
       this.retryTimer = -1;
@@ -245,4 +396,15 @@ export class VpnBackgroundTaskManager {
       this.healthTimer = -1;
     }
   }
+
+  private stopProgressRefresh(): void {
+    if (this.progressTimer >= 0) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = -1;
+    }
+  }
 }
+
+// The UIAbility process owns the continuous task; the VPN extension process gets
+// its own module instance, which only mirrors the VPN session state.
+export const vpnBackgroundTaskManager: VpnBackgroundTaskManager = new VpnBackgroundTaskManager();

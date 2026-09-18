@@ -49,6 +49,7 @@ import {
   TaildropReceiveResult
 } from '../services/TaildropReceiveGateway';
 import { APP_FOREGROUND_EVENT } from '../services/AppLifecycleEvents';
+import { vpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
 import { SunshineProbeService } from '../services/SunshineProbeService';
 import { PeerPathService } from '../services/PeerPathService';
 import { MoonlightLauncher } from '../services/MoonlightLauncher';
@@ -458,7 +459,7 @@ export struct BridgeStatus {
   @State backendStatus: string = 'Tailscale Backend Stopped';
   @State loginHandoffStatus: string = 'Secure Login Pending';
   @State controlProbeStatus: string = 'Control TLS Probe Pending';
-  @State vpnStatus: string = 'HarmonyOS VPN Extension Stopped';
+  @State @Watch('handleVpnStatusChanged') vpnStatus: string = 'HarmonyOS VPN Extension Stopped';
   @State exitNodes: ExitNodeChoice[] = [];
   @State peers: PeerSummary[] = [];
   @State networkSettings: NetworkSettings = {
@@ -758,6 +759,9 @@ export struct BridgeStatus {
     this.vpnHeartbeatConfirmed = false;
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     context.eventHub.on(APP_FOREGROUND_EVENT, this.appForegroundListener);
+    // Only a UIAbility may own the continuous task that protects the VPN
+    // extension process, so hand our ability context to the manager here.
+    vpnBackgroundTaskManager.attachAbilityContext(context);
     this.loadGlowLevel();
     this.fakeMediaServiceOnline = false;
     this.loadSettingsPreferences(context);
@@ -3427,6 +3431,29 @@ export struct BridgeStatus {
     if (this.healthPollTimer >= 0) {
       clearTimeout(this.healthPollTimer);
       this.healthPollTimer = -1;
+    }
+  }
+
+  // The VPN session is owned by the extension process, but only this ability
+  // process can hold the continuous task that keeps that process alive. Mirror
+  // every observed session transition into the background task manager.
+  private handleVpnStatusChanged(): void {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      if (context === undefined || context === null) {
+        return;
+      }
+      if (this.vpnStatus.includes('state=Running') || this.vpnStatus.includes('tun=true')) {
+        vpnBackgroundTaskManager.onVpnConnected(context);
+        return;
+      }
+      const normalized: string = this.vpnStatus.toLowerCase();
+      if (this.vpnStatus.startsWith('FAILED') || normalized.includes('stopped') ||
+        normalized.includes('destroyed') || normalized.includes('disconnected')) {
+        vpnBackgroundTaskManager.onVpnDisconnected(context);
+      }
+    } catch (_error) {
+      // Background coverage must never affect status rendering.
     }
   }
 

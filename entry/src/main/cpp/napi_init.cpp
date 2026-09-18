@@ -830,6 +830,39 @@ napi_value BackendSetExitNode(napi_env env, napi_callback_info info)
     return result;
 }
 
+napi_value BackendSetDefaultRouteInterface(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok || argc != 1) {
+        napi_throw_type_error(env, nullptr, "backendSetDefaultRouteInterface requires one interface name");
+        return nullptr;
+    }
+    size_t length = 0;
+    if (napi_get_value_string_utf8(env, args[0], nullptr, 0, &length) != napi_ok) {
+        napi_throw_type_error(env, nullptr, "Default route interface name must be a string");
+        return nullptr;
+    }
+    std::vector<char> ifName(length + 1, '\0');
+    if (napi_get_value_string_utf8(env, args[0], ifName.data(), ifName.size(), &length) != napi_ok) {
+        napi_throw_error(env, nullptr, "Failed to read the default route interface name");
+        return nullptr;
+    }
+    char* message = TSBackendSetDefaultRouteInterface(ifName.data());
+    if (message == nullptr) {
+        napi_throw_error(env, nullptr, "Default route update returned a null status");
+        return nullptr;
+    }
+    napi_value result = nullptr;
+    napi_status status = napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &result);
+    TSFreeString(message);
+    if (status != napi_ok) {
+        napi_throw_error(env, nullptr, "Failed to transfer default route update status");
+        return nullptr;
+    }
+    return result;
+}
+
 napi_value BackendPeerProbe(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -977,6 +1010,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"backendLogout", nullptr, BackendLogout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStatus", nullptr, BackendStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendNetworkChangedAsync", nullptr, BackendNetworkChangedAsync, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
+        {"backendSetDefaultRouteInterface", nullptr, BackendSetDefaultRouteInterface, nullptr, nullptr, nullptr,
             napi_default, nullptr},
         {"backendSnapshot", nullptr, BackendSnapshotAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendTaildropIncomingSnapshot", nullptr, BackendTaildropIncomingSnapshotAsync,

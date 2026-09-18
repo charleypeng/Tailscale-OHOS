@@ -93,6 +93,14 @@ func TSBackendNetworkChanged() *C.char {
 	return C.CString(harmonyBackend.networkChanged())
 }
 
+//export TSBackendSetDefaultRouteInterface
+func TSBackendSetDefaultRouteInterface(ifName *C.char) *C.char {
+	if ifName == nil {
+		return C.CString(harmonyBackend.setDefaultRouteInterface(""))
+	}
+	return C.CString(harmonyBackend.setDefaultRouteInterface(C.GoString(ifName)))
+}
+
 //export TSBackendSnapshot
 func TSBackendSnapshot() *C.char {
 	return C.CString(harmonyBackend.snapshot())

@@ -22,7 +22,7 @@
         "startWindowIcon": "$media:start_window_icon",
         "startWindowBackground": "$color:start_window_background",
         "backgroundModes": [
-          "multiDeviceConnection"
+          "dataTransfer"
         ],
         "exported": true,
         "skills": [
@@ -59,7 +59,14 @@
         "name": "ohos.permission.GET_BUNDLE_INFO"
       },
       {
-        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:background_running_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "always"
+        }
       },
       {
         "name": "ohos.permission.SHORT_TERM_WRITE_IMAGEVIDEO",

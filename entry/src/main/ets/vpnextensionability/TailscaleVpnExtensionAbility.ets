@@ -14,7 +14,6 @@ import {
 } from '../services/TaildropNotificationService';
 import { ControlServerConfig, ControlServerSettings } from '../services/ControlServerConfig';
 import { DeviceNameService } from '../services/DeviceNameService';
-import { VpnBackgroundTaskManager } from '../services/VpnBackgroundTaskManager';
 
 const DOMAIN = 0x0000;
 const TAG = 'TailscaleVpn';
@@ -32,6 +31,26 @@ const VPN_BACKEND_HANDOFF_POLL_INTERVAL_MS: number = 100;
 const VPN_BACKEND_HANDOFF_MAX_ATTEMPTS: number = 150;
 const PEER_CONNECTIVITY_REQUEST_FILE_NAME: string = 'peer-connectivity-request.json';
 const PEER_CONNECTIVITY_RESPONSE_FILE_NAME: string = 'peer-connectivity-response.json';
+
+// Only a physical data bearer may be reported to the engine as the default
+// route. A phone exposes more interfaces than a desktop host, and several of
+// them carry routable-looking addresses that can never reach a peer: the VPN
+// interface this application creates, the operator anchor (ancormnet*) and the
+// IMS/VoLTE bearer (rmnet_ims*). Reporting one of those would pin magicsock to
+// an address that says nothing about where the packets actually leave.
+function isPhysicalNetworkInterface(name: string): boolean {
+  if (name.length === 0) {
+    return false;
+  }
+  if (name.startsWith('wlan') || name.startsWith('wifi')) {
+    return true;
+  }
+  if (name === 'rmnet0' || name === 'rmnet1' || name === 'rmnet2' ||
+    name.startsWith('rmnet_data')) {
+    return true;
+  }
+  return name.startsWith('eth') || name === 'usb0';
+}
 const SUNSHINE_PROBE_REQUEST_FILE_NAME: string = 'sunshine-probe-request.json';
 const SUNSHINE_PROBE_RESPONSE_FILE_NAME: string = 'sunshine-probe-response.json';
 const MEDIA_SERVICE_PROBE_REQUEST_FILE_NAME: string = 'media-service-probe-request.json';
@@ -271,12 +290,19 @@ function emptyTaildropTransfer(): TaildropTransferSummary {
 }
 
 export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
-  private readonly vpnBackgroundTask: VpnBackgroundTaskManager = new VpnBackgroundTaskManager();
+  // This process has no UIAbility, and a Stage-model continuous task can only be
+  // requested by one, so the keep-alive task is owned by EntryAbility instead.
+  // This process only publishes the VPN status that the ability process reads.
   private networkMonitor?: connection.NetConnection;
   private networkRebindTimer: number = -1;
   private networkRebindInFlight: boolean = false;
   private lastNetworkRebindAtMs: number = 0;
   private uiBackendHandoffComplete: boolean = false;
+  // Physical interface reported by the network manager. It is pushed into the
+  // engine immediately before a rebind, because netmon can only pick it up
+  // while it recomputes its cached state during that call.
+  private pendingDefaultRouteInterface: string = '';
+  private publishedDefaultRouteInterface: string = '';
   private readonly networkAvailableCallback = (_handle: connection.NetHandle): void => {
     this.scheduleNetworkRebind('available');
   };
@@ -286,7 +312,8 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   private readonly networkCapabilitiesCallback = (_info: connection.NetCapabilityInfo): void => {
     this.scheduleNetworkRebind('capabilities');
   };
-  private readonly networkPropertiesCallback = (_info: connection.NetConnectionPropertyInfo): void => {
+  private readonly networkPropertiesCallback = (info: connection.NetConnectionPropertyInfo): void => {
+    this.observeDefaultRouteInterface(info);
     this.scheduleNetworkRebind('properties');
   };
   private vpnConnection?: vpnExtension.VpnConnection;
@@ -318,7 +345,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   };
 
   onCreate(want: Want): void {
-    this.vpnBackgroundTask.register();
     this.recordDiagnosticEvent('vpn_extension_created', 'lifecycle');
     this.writePeerSnapshot([]);
     this.cleanupStaleTaildropOutbox();
@@ -523,7 +549,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         }
         this.writeStatus(finalStatus);
         if (finalStatus.includes('state=Running')) {
-          this.vpnBackgroundTask.onVpnConnected(this.context);
           this.startNetworkMonitoring();
           this.recordDiagnosticEvent('vpn_connected', 'backend');
           const peerStatus: string = await nativeBridge.backendPeerProbeAsync();
@@ -633,6 +658,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     }
     this.networkRebindInFlight = true;
     this.lastNetworkRebindAtMs = Date.now();
+    // The interface has to be published before the notification, because netmon
+    // recomputes its cached state inside that call and only then reads the hint.
+    this.publishDefaultRouteInterface();
     nativeBridge.backendNetworkChangedAsync()
       .then((status: string) => {
         this.recordDiagnosticEvent(status.startsWith('OK') ?
@@ -642,6 +670,48 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       .finally(() => {
         this.networkRebindInFlight = false;
       });
+  }
+
+  // The engine cannot resolve the default route by itself inside the VPN
+  // sandbox: /proc/net/route carries no default entry and AF_NETLINK route
+  // dumps are denied, so netmon's default interface stays empty and magicsock
+  // keeps relay paths that belong to a network that is already gone. The
+  // physical network resolved here answers that question, so remember it and
+  // publish it right before the next rebind.
+  private observeDefaultRouteInterface(info: connection.NetConnectionPropertyInfo): void {
+    try {
+      const properties: connection.ConnectionProperties | undefined = info.connectionProperties;
+      if (properties === undefined) {
+        return;
+      }
+      const interfaceName: string = properties.interfaceName ?? '';
+      if (!isPhysicalNetworkInterface(interfaceName)) {
+        return;
+      }
+      this.pendingDefaultRouteInterface = interfaceName;
+    } catch (_error) {
+      // A missing hint only degrades DERP rebinding on a handover; it must
+      // never block network recovery.
+    }
+  }
+
+  private publishDefaultRouteInterface(): void {
+    const interfaceName: string = this.pendingDefaultRouteInterface;
+    if (interfaceName === this.publishedDefaultRouteInterface) {
+      return;
+    }
+    try {
+      const status: string = nativeBridge.backendSetDefaultRouteInterface(interfaceName);
+      this.publishedDefaultRouteInterface = interfaceName;
+      this.recordDiagnosticEvent('network_default_route_published',
+        interfaceName.length > 0 ? interfaceName : 'none');
+      if (!status.startsWith('OK')) {
+        this.recordDiagnosticEvent('network_default_route_rejected', interfaceName);
+      }
+    } catch (_error) {
+      // A missing hint only degrades DERP rebinding on a handover; it must
+      // never block network recovery.
+    }
   }
 
   private stopNetworkMonitoring(): void {
@@ -1919,8 +1989,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   onDestroy(): void {
     this.destroying = true;
     this.stopNetworkMonitoring();
-    this.vpnBackgroundTask.onVpnDisconnected(this.context);
-    this.vpnBackgroundTask.unregister();
     this.recordDiagnosticEvent('vpn_extension_destroyed', 'lifecycle');
     this.stopBackendStopWatcher();
     if (this.statusTimer >= 0) {

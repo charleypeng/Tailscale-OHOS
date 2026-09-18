@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "background_running_reason",
+      "value": "Keep the VPN tunnel and its peer connections running while the app is in the background."
+    },
+    {
       "name": "permission_short_term_write_imagevideo_reason",
       "value": "Save received images and videos to the system gallery."
     },

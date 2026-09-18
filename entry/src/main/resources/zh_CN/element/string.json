@@ -1,5 +1,6 @@
 {
   "string": [
+    { "name": "background_running_reason", "value": "应用退到后台后，保持 VPN 隧道与设备连接不中断。" },
     { "name": "permission_short_term_write_imagevideo_reason", "value": "将收到的图片和视频保存到系统图库。" },
     { "name": "taildrive_title", "value": "\u8fdc\u7a0b\u6587\u4ef6" },
     { "name": "taildrive_subtitle", "value": "\u6d4f\u89c8 Tailnet \u8bbe\u5907\u5171\u4eab\u7684\u6587\u4ef6\u5939\u3002" },

@@ -7,6 +7,7 @@ export const backendStop: () => string;
 export const backendLogout: () => string;
 export const backendStatus: () => string;
 export const backendNetworkChangedAsync: () => Promise<string>;
+export const backendSetDefaultRouteInterface: (ifName: string) => string;
 export const backendSnapshot: () => Promise<string>;
 export const backendTaildropIncomingSnapshot: () => Promise<string>;
 export const backendStopAsync: () => Promise<string>;
