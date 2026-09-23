@@ -116,6 +116,35 @@ Raw device layouts and endpoint-bearing baseline output stay under ignored
 `.codex/vpn-recovery-20260923/`; do not publish them. New diagnostic network events
 contain only the bearer category and numeric error code.
 
+## Peer reconnect presence follow-up
+
+The home directory previously treated a cached `no_response`, `peer_offline`, or
+`peer_not_found` path result as authoritative device presence. After the computer
+reconnected, this could keep it in the offline group despite a current online
+backend snapshot, and prevent service refreshes from retrying.
+
+Presence now follows the current backend peer snapshot. An online peer with a
+failed path displays connection recovery; a backend-offline peer remains offline.
+Presence transitions cancel outstanding discovery results, clear per-peer caches,
+and allow service discovery again in the same phone VPN session. Older service
+responses cannot replace a newer path result, and home probes from a previous VPN
+session, UI lifecycle, removed/offline peer, or cancelled request are discarded.
+
+Validation on 2026-09-23:
+
+- Ten new controller regression tests cover stale reachability, offline/online
+  transitions, busy discovery, out-of-order responses, and obsolete home probes.
+  All 34 reconnect, path-cache, network-monitor, and background-task tests pass.
+- The Debug HAP compiled and installed on the connected phone, retaining data.
+- A short computer `tailscale down` / `tailscale up` cycle, with Wi-Fi left
+  connected, produced `connection recovering` on the phone and then a 436 ms
+  relayed path automatically. The phone VPN session was unchanged. The control
+  plane still reported the computer online during this short interruption, which
+  exercised the previously incorrect promotion of a failed path to offline.
+- This validates Tailscale peer reconnection. A physical computer Wi-Fi adapter
+  disconnect/reconnect was not performed in this follow-up. The previously
+  skipped uninterrupted lock-screen test remains skipped.
+
 ## Official API reference
 
 The official HarmonyOS Knowledge MCP documentation was consulted before using
