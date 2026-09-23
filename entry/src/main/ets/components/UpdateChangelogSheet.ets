@@ -1,4 +1,14 @@
 import { MotionTokens } from './MotionTokens';
+import {
+  BlurStrategy,
+  DividerShowType,
+  HdsNavigation,
+  HdsNavigationAttribute,
+  HdsNavigationTitleMode,
+  IconStyleMode,
+  TextStyleMode,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 
 export interface UpdateChangelogEntry {
   versionName: string;
@@ -6,136 +16,121 @@ export interface UpdateChangelogEntry {
   releaseDate: string;
   changes: string[];
   current: boolean;
+  imageResource?: Resource;
 }
 
 /**
- * Release notes presented as a large, non-destructive bottom sheet.  The
- * parent owns visibility and persistence so this component remains a pure UI
- * surface that can be reused for later release-note entries.
+ * Release notes presented as a compact bottom sheet. The parent owns
+ * visibility and persistence; this component only owns the selected release
+ * while the user browses the notes.
  */
 @Component
 export struct UpdateChangelogSheet {
   @Prop entries: UpdateChangelogEntry[] = [];
   @Prop appName: string = 'MeshArc';
-  @Link actionRequest: string;
+  @Prop materialLevel: hdsMaterial.MaterialLevel = hdsMaterial.MaterialLevel.ADAPTIVE;
+
+  @State private selectedIndex: number = 0;
+  private detailsSwiperController: SwiperController = new SwiperController();
+
+  private selectVersion(index: number): void {
+    if (index < 0 || index >= this.entries.length || index === this.selectedIndex) {
+      return;
+    }
+    this.selectedIndex = index;
+    this.detailsSwiperController.changeIndex(index, true);
+  }
+
+  private requestAction(action: string): void {
+    AppStorage.setOrCreate('updateChangelogAction', action);
+  }
 
   @Builder
-  private Header() {
-    Row({ space: 12 }) {
-      Text($r('app.string.update_changelog_title'))
-        .fontSize(28)
+  private VersionTimelineItem(entry: UpdateChangelogEntry, index: number) {
+    Column({ space: 5 }) {
+      Stack() {
+        Row()
+          .width('100%')
+          .height(2)
+          .backgroundColor($r('sys.color.comp_divider'))
+        Row()
+          .width(index === this.selectedIndex ? 14 : 10)
+          .height(index === this.selectedIndex ? 14 : 10)
+          .borderRadius(index === this.selectedIndex ? 7 : 5)
+          .backgroundColor(index === this.selectedIndex ? $r('app.color.emphasize') :
+            $r('sys.color.icon_secondary'))
+          .align(Alignment.Start)
+      }
+      .width('100%')
+      .height(16)
+
+      Text(`v${entry.versionName}`)
+        .fontSize(15)
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('sys.color.font_primary'))
-        .layoutWeight(1)
+        .fontColor(index === this.selectedIndex ? Color.White : $r('sys.color.font_primary'))
+        .textAlign(TextAlign.Center)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .padding({ left: 7, right: 7, top: 6, bottom: 6 })
+        .backgroundColor(index === this.selectedIndex ? $r('app.color.emphasize') :
+          $r('sys.color.background_primary'))
+        .borderRadius(17)
 
-      Button({ type: ButtonType.ROUNDED_RECTANGLE, stateEffect: true }) {
-        Text($r('app.string.update_changelog_dont_show'))
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
-      }
-      .id('update-changelog-dont-show')
-      .height(48)
-      .constraintSize({ minWidth: 132 })
-      .padding({ left: 18, right: 18 })
-      .backgroundColor(Color.Transparent)
-      .border({ width: 1, color: $r('sys.color.comp_divider') })
-      .borderRadius(24)
-      .onClick(() => this.actionRequest = 'disable')
+      Text(`versionCode ${entry.versionCode}`)
+        .fontSize(11)
+        .fontColor(index === this.selectedIndex ? $r('app.color.emphasize') :
+          $r('sys.color.font_secondary'))
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
 
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        Text('\u00D7')
-          .fontSize(31)
-          .fontWeight(FontWeight.Normal)
-          .fontColor($r('sys.color.font_primary'))
-          .textAlign(TextAlign.Center)
-      }
-      .id('update-changelog-close')
-      .width(52)
-      .height(52)
-      .padding(0)
-      .backgroundColor(Color.Transparent)
-      .border({ width: 1, color: $r('sys.color.comp_divider') })
-      .onClick(() => this.actionRequest = 'dismiss')
+      Text(entry.releaseDate)
+        .fontSize(11)
+        .fontColor($r('sys.color.font_secondary'))
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
     }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
+    .width(126)
+    .padding({ left: 2, right: 2 })
+    .onClick(() => this.selectVersion(index))
   }
 
   @Builder
   private VersionTimeline() {
-    Row({ space: 6 }) {
-      ForEach(this.entries, (entry: UpdateChangelogEntry) => {
-        Column({ space: 7 }) {
-          Stack() {
-            Row()
-              .width('100%')
-              .height(2)
-              .backgroundColor($r('sys.color.comp_divider'))
-            Row()
-              .width(14)
-              .height(14)
-              .borderRadius(7)
-              .backgroundColor(entry.current ? $r('app.color.emphasize') :
-                $r('sys.color.icon_secondary'))
-              .align(Alignment.Start)
-          }
-          .width('100%')
-          .height(18)
-
-          Text(`v${entry.versionName}`)
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(entry.current ? Color.White : $r('sys.color.font_primary'))
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-            .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-            .backgroundColor(entry.current ? $r('app.color.emphasize') :
-              $r('sys.color.background_primary'))
-            .borderRadius(20)
-
-          Text(`versionCode ${entry.versionCode}`)
-            .fontSize(12)
-            .fontColor(entry.current ? $r('app.color.emphasize') :
-              $r('sys.color.font_secondary'))
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-
-          Text(entry.releaseDate)
-            .fontSize(12)
-            .fontColor($r('sys.color.font_secondary'))
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-        .layoutWeight(1)
-        .padding({ left: 3, right: 3 })
-      }, (entry: UpdateChangelogEntry) => `${entry.versionCode}`)
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.entries, (entry: UpdateChangelogEntry, index: number) => {
+          this.VersionTimelineItem(entry, index);
+        }, (entry: UpdateChangelogEntry, index: number) => `${entry.versionCode}-${index}`)
+      }
+      .padding({ left: 8, right: 8 })
     }
+    .id('update-changelog-timeline')
     .width('100%')
-    .padding({ left: 8, right: 8, top: 14, bottom: 14 })
+    .height(116)
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.None)
     .backgroundColor($r('app.color.surface_subtle'))
-    .borderRadius(24)
+    .borderRadius(20)
+    .padding({ top: 11, bottom: 8 })
   }
 
   @Builder
   private ChangeRow(change: string) {
-    Row({ space: 12 }) {
+    Row({ space: 9 }) {
       Text('\u2022')
-        .fontSize(21)
+        .fontSize(17)
         .fontColor($r('app.color.emphasize'))
-        .width(14)
+        .width(11)
         .textAlign(TextAlign.Center)
       Text(change)
-        .fontSize(17)
-        .lineHeight(26)
+        .fontSize(15)
+        .lineHeight(23)
         .fontColor($r('sys.color.font_primary'))
         .layoutWeight(1)
     }
@@ -144,64 +139,133 @@ export struct UpdateChangelogSheet {
   }
 
   @Builder
-  private ChangelogDetails() {
-    if (this.entries.length > 0) {
-      Column({ space: 14 }) {
-        Text(`${this.appName} ${this.entries[0].versionName}`)
-          .fontSize(31)
+  private ChangelogDetails(entry: UpdateChangelogEntry) {
+    Scroll() {
+      Column({ space: 10 }) {
+        if (entry.imageResource !== undefined) {
+          Image(entry.imageResource)
+            .width('100%')
+            .aspectRatio(3.0)
+            .objectFit(ImageFit.Contain)
+            .borderRadius(12)
+            .margin({ bottom: 4 })
+        }
+
+        Text(`${this.appName} ${entry.versionName}`)
+          .fontSize(25)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
 
-        Text(`VersionCode: ${this.entries[0].versionCode}`)
-          .fontSize(18)
+        Text(`VersionCode: ${entry.versionCode}`)
+          .fontSize(15)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
 
-        Text(this.entries[0].releaseDate)
-          .fontSize(18)
+        Text(entry.releaseDate)
+          .fontSize(15)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
 
         Text($r('app.string.update_changelog_section'))
-          .fontSize(24)
+          .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
-          .margin({ top: 4 })
+          .margin({ top: 5 })
 
-        ForEach(this.entries[0].changes, (change: string, index: number) => {
+        ForEach(entry.changes, (change: string, index: number) => {
           this.ChangeRow(change);
-        }, (_change: string, index: number) => `${index}`)
+        }, (_change: string, index: number) => `${entry.versionCode}-${index}`)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Start)
+      .padding({ left: 4, right: 4, bottom: 18 })
+    }
+    .id(`update-changelog-content-${entry.versionCode}`)
+    .width('100%')
+    .height('100%')
+    .align(Alignment.TopStart)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  private ChangelogPages() {
+    if (this.entries.length > 0) {
+      Swiper(this.detailsSwiperController) {
+        ForEach(this.entries, (entry: UpdateChangelogEntry, index: number) => {
+          this.ChangelogDetails(entry);
+        }, (entry: UpdateChangelogEntry, index: number) => `${entry.versionCode}-${index}`)
+      }
+      .id('update-changelog-pages')
+      .index(this.selectedIndex)
+      .indicator(false)
+      .loop(false)
+      .duration(MotionTokens.NORMAL)
+      .onChange((index: number) => this.selectedIndex = index)
+      .layoutWeight(1)
+      .width('100%')
+    } else {
+      Column() {
+        Text($r('app.string.update_changelog_title'))
+          .fontSize(15)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
     }
   }
 
   build() {
-    Column() {
-      this.Header()
-      this.VersionTimeline()
-      Scroll() {
-        this.ChangelogDetails()
+    HdsNavigation() {
+      Column({ space: 12 }) {
+        this.VersionTimeline()
+        this.ChangelogPages()
       }
-      .id('update-changelog-content')
-      .layoutWeight(1)
-      .width('100%')
-      .edgeEffect(EdgeEffect.Spring)
-      .scrollBar(BarState.Off)
-      .padding({ left: 24, right: 24 })
+        .width('100%')
+        .height('100%')
+        .padding({ left: 18, right: 18, top: 8, bottom: 16 })
+        .backgroundColor($r('sys.color.background_secondary'))
     }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 20, right: 20, top: 26, bottom: 20 })
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius({ topLeft: 30, topRight: 30 })
-    .shadow({ radius: 24, color: '#33000000', offsetY: -8, offsetX: 0 })
-    .transition(TransitionEffect.OPACITY.animation({
-      duration: MotionTokens.NORMAL,
-      curve: Curve.EaseOut
-    }))
+      .titleMode(HdsNavigationTitleMode.MODAL)
+      .titleBar({
+        enableComponentSafeArea: true,
+        style: {
+          blurStrategy: BlurStrategy.DISABLE,
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: this.materialLevel
+          }
+        },
+        content: {
+          title: { mainTitle: $r('app.string.update_changelog_title') },
+          menu: {
+            value: [{
+              content: {
+                label: $r('app.string.update_changelog_only_on_update'),
+                type: TextStyleMode.NORMAL,
+                isEnabled: true,
+                action: () => this.requestAction('only_on_update')
+              }
+            }, {
+              content: {
+                label: $r('app.string.native_settings_close'),
+                type: IconStyleMode.SMALL,
+                isEnabled: true,
+                action: () => this.requestAction('dismiss')
+              }
+            }]
+          },
+          divider: { showType: DividerShowType.OFF }
+        }
+      })
+      .hideBackButton(true)
+      .width('100%')
+      .height('100%')
+      .backgroundColor($r('sys.color.background_secondary'))
+      .id('update-changelog-navigation')
   }
 }

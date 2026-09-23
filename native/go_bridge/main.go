@@ -93,6 +93,11 @@ func TSBackendSnapshot() *C.char {
 	return C.CString(harmonyBackend.snapshot())
 }
 
+//export TSBackendLocalSendRefresh
+func TSBackendLocalSendRefresh() *C.char {
+	return C.CString(harmonyBackend.refreshMeshArcDevices())
+}
+
 //export TSBackendTaildropIncomingSnapshot
 func TSBackendTaildropIncomingSnapshot() *C.char {
 	return C.CString(harmonyBackend.taildropIncomingSnapshotJSON())
@@ -236,6 +241,14 @@ func TSBackendTaildriveDownload(request *C.char) *C.char {
 		return C.CString(`{"state":"failed","reason":"invalid_request"}`)
 	}
 	return C.CString(harmonyBackend.taildriveDownload(C.GoString(request)))
+}
+
+//export TSBackendTaildriveManualDownload
+func TSBackendTaildriveManualDownload(request *C.char) *C.char {
+	if request == nil {
+		return C.CString(`{"state":"failed","reason":"invalid_request"}`)
+	}
+	return C.CString(harmonyBackend.taildriveManualDownload(C.GoString(request)))
 }
 
 //export TSBackendTaildriveUpload

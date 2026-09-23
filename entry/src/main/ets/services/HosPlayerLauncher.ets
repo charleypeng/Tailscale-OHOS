@@ -1,7 +1,8 @@
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { HosPlayerLaunchRequest } from './MediaIntegrationModels';
 
 export interface HosPlayerContractConfig {
+  action: string;
   baseUri: string;
 }
 
@@ -9,6 +10,7 @@ export interface HosPlayerContractConfig {
 // receiving application's bundle and ability names so the system resolver can
 // route it through Deep Linking.
 export const HOSPLAYER_CONTRACT: HosPlayerContractConfig = {
+  action: 'ohos.want.action.viewData',
   baseUri: 'hosplayer://server/import'
 };
 
@@ -31,23 +33,32 @@ export class HosPlayerLauncher {
   }
 
   async launch(request: HosPlayerLaunchRequest): Promise<void> {
-    await this.context.openLink(this.buildUri(request), { appLinkingOnly: false });
+    await this.context.startAbility(this.buildWant(request));
   }
 
   runOfflineSelfTest(): string {
-    const uri: string = this.buildUri({
+    const want: Want = this.buildWant({
       protocolVersion: 1,
       type: 'jellyfin',
       endpoint: 'http://100.64.0.10:8096',
       name: '家庭 NAS'
     });
-    const passed: boolean = uri.startsWith('hosplayer://server/import?') &&
+    const uri: string = want.uri ?? '';
+    const passed: boolean = want.action === HOSPLAYER_CONTRACT.action &&
+      uri.startsWith('hosplayer://server/import?') &&
       uri.includes('type=jellyfin') &&
       uri.includes('endpoint=http%3A%2F%2F100.64.0.10%3A8096') &&
       uri.includes('name=%E5%AE%B6%E5%BA%AD%20NAS') &&
       !uri.toLowerCase().includes('password') &&
       !uri.toLowerCase().includes('token');
     return passed ? `PASS | ${uri}` : 'FAILED | HosPlayer parameter contract';
+  }
+
+  private buildWant(request: HosPlayerLaunchRequest): Want {
+    return {
+      action: HOSPLAYER_CONTRACT.action,
+      uri: this.buildUri(request)
+    };
   }
 
   private validate(request: HosPlayerLaunchRequest): void {

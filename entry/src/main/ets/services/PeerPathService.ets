@@ -5,7 +5,7 @@ import { ConnectionPathType, PeerPathResult } from './StreamingModels';
 const REQUEST_FILE: string = 'peer-connectivity-request.json';
 const RESPONSE_FILE: string = 'peer-connectivity-response.json';
 const CACHE_TTL_MS: number = 25000;
-const TIMEOUT_MS: number = 4000;
+const TIMEOUT_MS: number = 2500;
 
 interface PeerPathResponse {
   requestId: number;
@@ -115,8 +115,10 @@ export class PeerPathService {
       const result: NativePeerPathResult = JSON.parse(text) as NativePeerPathResult;
       const checkedAt: number = Date.now();
       if (result.state !== 'reachable' && result.state !== 'degraded') {
+        const unreachable: boolean = result.reason === 'no_response' || result.reason === 'peer_offline' ||
+          result.reason === 'peer_not_found';
         return {
-          type: result.reason === 'no_response' ? 'unreachable' : 'unknown',
+          type: unreachable ? 'unreachable' : 'unknown',
           checkedAt: checkedAt,
           errorMessage: result.reason
         };

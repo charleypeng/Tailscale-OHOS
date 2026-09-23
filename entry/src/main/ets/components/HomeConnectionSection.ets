@@ -18,10 +18,10 @@ export struct HomeConnectionSection {
       .width('100%')
       .transition(
         TransitionEffect.asymmetric(
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: Curve.EaseOut })
-            .combine(TransitionEffect.translate({ y: 12 })),
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: Curve.EaseIn })
-            .combine(TransitionEffect.translate({ y: -8 }))
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(12) })),
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(-8) }))
         )
       )
     } else if (this.layoutMode === ConnectedHomeLayoutMode.LEGACY) {
@@ -31,10 +31,10 @@ export struct HomeConnectionSection {
       .width('100%')
       .transition(
         TransitionEffect.asymmetric(
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: Curve.EaseOut })
-            .combine(TransitionEffect.translate({ y: 12 })),
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: Curve.EaseIn })
-            .combine(TransitionEffect.translate({ y: -8 }))
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(12) })),
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(-8) }))
         )
       )
     } else {
@@ -44,10 +44,10 @@ export struct HomeConnectionSection {
       .width('100%')
       .transition(
         TransitionEffect.asymmetric(
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: Curve.EaseOut })
-            .combine(TransitionEffect.translate({ y: 12 })),
-          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: Curve.EaseIn })
-            .combine(TransitionEffect.translate({ y: -8 }))
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(12) })),
+          TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: MotionTokens.curve() })
+            .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(-8) }))
         )
       )
     }

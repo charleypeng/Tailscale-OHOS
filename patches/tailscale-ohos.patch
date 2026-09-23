@@ -1,3 +1,19 @@
+diff --git a/client/tailscale/apitype/apitype.go b/client/tailscale/apitype/apitype.go
+index 58cdcec..c3cd8bb 100644
+--- a/client/tailscale/apitype/apitype.go
++++ b/client/tailscale/apitype/apitype.go
+@@ -52,8 +52,9 @@ type FileTarget struct {
+ }
+ 
+ type WaitingFile struct {
+-	Name string
+-	Size int64
++	Name         string
++	Size         int64
++	ReceivedAtMs int64 `json:"receivedAtMs,omitempty"`
+ }
+ 
+ // SetPushDeviceTokenRequest is the body POSTed to the LocalAPI endpoint /set-device-token.
 diff --git a/feature/taildrop/localapi.go b/feature/taildrop/localapi.go
 index 8a3904f..8054012 100644
 --- a/feature/taildrop/localapi.go
@@ -160,6 +176,27 @@ index 8a3904f..8054012 100644
  
  	return true
  }
+diff --git a/feature/taildrop/retrieve.go b/feature/taildrop/retrieve.go
+index b048a1b..3c65510 100644
+--- a/feature/taildrop/retrieve.go
++++ b/feature/taildrop/retrieve.go
+@@ -86,9 +86,14 @@ func (m *manager) WaitingFiles() ([]apitype.WaitingFile, error) {
+ 		if err != nil {
+ 			continue
+ 		}
++		receivedAtMs := int64(0)
++		if !fi.ModTime().IsZero() {
++			receivedAtMs = fi.ModTime().UnixMilli()
++		}
+ 		ret = append(ret, apitype.WaitingFile{
+-			Name: name,
+-			Size: fi.Size(),
++			Name:         name,
++			Size:         fi.Size(),
++			ReceivedAtMs: receivedAtMs,
+ 		})
+ 	}
+ 	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
 diff --git a/ipn/ipnlocal/local.go b/ipn/ipnlocal/local.go
 index 7154b94..579aced 100644
 --- a/ipn/ipnlocal/local.go
@@ -206,7 +243,7 @@ index e7ae2d6..74a9cb3 100644
  		e.SSH_HostKeys = v
  	}
 diff --git a/tsnet/tsnet.go b/tsnet/tsnet.go
-index 65367f2..a9815de 100644
+index 65367f2..cd36fc2 100644
 --- a/tsnet/tsnet.go
 +++ b/tsnet/tsnet.go
 @@ -26,9 +26,11 @@
@@ -255,11 +292,7 @@ index 65367f2..a9815de 100644
  	// Dir specifies the name of the directory to use for
  	// state. If empty, a directory is selected automatically
  	// under os.UserConfigDir (https://golang.org/pkg/os/#UserConfigDir).
-@@ -219,8 +241,47 @@ func (s *Server) HTTPClient() *http.Client {
- 	return &http.Client{
- 		Transport: &http.Transport{
- 			DialContext: s.Dial,
- 		},
+@@ -219,6 +241,46 @@ func (s *Server) HTTPClient() *http.Client {
  	}
  }
  
@@ -302,8 +335,11 @@ index 65367f2..a9815de 100644
 +	}
 +	return &http.Client{Transport: transport}, nil
 +}
- 
-@@ -427,7 +488,11 @@ func (s *Server) Close() error {
++
+ // LocalClient returns a LocalClient that speaks to s.
+ //
+ // It will start the server if it has not been started yet. If the server's
+@@ -427,6 +489,10 @@ func (s *Server) Close() error {
  	if s.localAPIListener != nil {
  		s.localAPIListener.Close()
  	}
@@ -314,8 +350,7 @@ index 65367f2..a9815de 100644
  	if s.loopbackListener != nil {
  		s.loopbackListener.Close()
  	}
- 
-@@ -570,7 +635,11 @@ func (s *Server) start() (reterr error) {
+@@ -570,7 +636,11 @@ func (s *Server) start() (reterr error) {
  	closePool.add(s.netMon)
  
  	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
@@ -327,22 +362,22 @@ index 65367f2..a9815de 100644
  		EventBus:      sys.Bus.Get(),
  		ListenPort:    s.Port,
  		NetMon:        s.netMon,
-@@ -579,7 +648,8 @@ func (s *Server) start() (reterr error) {
- 	ControlKnobs:  sys.ControlKnobs(),
- 	HealthTracker: sys.HealthTracker(),
- 	Metrics:       sys.UserMetricsRegistry(),
-+	DriveForLocal: s.taildriveFS,
+@@ -579,6 +649,7 @@ func (s *Server) start() (reterr error) {
+ 		ControlKnobs:  sys.ControlKnobs(),
+ 		HealthTracker: sys.HealthTracker(),
+ 		Metrics:       sys.UserMetricsRegistry(),
++		DriveForLocal: s.taildriveFS,
  	})
  	if err != nil {
- 	return err
- 	}
-@@ -587,5 +657,4 @@ func (s *Server) start() (reterr error) {
+ 		return err
+@@ -587,21 +658,26 @@ func (s *Server) start() (reterr error) {
  	sys.Set(eng)
  	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
  
 -	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
  	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
-@@ -594,14 +663,20 @@ func (s *Server) start() (reterr error) {
+ 	if err != nil {
+ 		return fmt.Errorf("netstack.Create: %w", err)
  	}
  	sys.Tun.Get().Start()
  	sys.Set(ns)
@@ -368,7 +403,7 @@ index 65367f2..a9815de 100644
  	}
  	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
  		// Note: don't just return ns.DialContextTCP or we'll return
-@@ -609,6 +684,9 @@ func (s *Server) start() (reterr error) {
+@@ -609,6 +685,9 @@ func (s *Server) start() (reterr error) {
  		// callers.
  		v4, v6 := s.TailscaleIPs()
  		src := bools.IfElse(dst.Addr().Is6(), v6, v4)

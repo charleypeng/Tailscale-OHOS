@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://appgallery.huawei.com/app/detail?id=io.github.tailscaleohos"><img src="https://img.shields.io/badge/AppGallery-获取_MeshArc-2563eb?style=for-the-badge" alt="在华为应用市场获取 MeshArc"></a>
+  <a href="https://github.com/flypigJ/Tailscale-OHOS/releases/latest"><img src="https://img.shields.io/badge/GitHub-Release-334155?style=for-the-badge" alt="查看最新 GitHub Release"></a>
   <a href="README.en.md"><img src="https://img.shields.io/badge/Read_in-English-334155?style=for-the-badge" alt="Read in English"></a>
 </p>
 
@@ -36,6 +37,7 @@
 | **在设备间传文件** | MeshSend 集成 Taildrop 收发，并提供 LocalSend 服务联动入口；支持传输进度、取消、重试和接收文件管理。 |
 | **浏览远程文件** | 在 Taildrive 中访问已共享且已授权的目录，浏览文件并上传、下载；可用操作取决于共享权限。 |
 | **打开远程媒体库** | 检测 Jellyfin、Emby、Plex 服务，并将服务器信息交给 HosPlayer；媒体账户在播放器内登录。 |
+| **保护本机访问入口** | 应用锁与 Taildrive 文件夹锁使用系统身份验证；它们保护 MeshArc 内的访问入口，不替代远端共享权限。 |
 | **享受原生鸿蒙体验** | ArkUI 原生界面、中英文、浅色与深色主题，以及面向手机、平板和 2in1 的自适应布局。 |
 
 功能介绍以本仓库公开源码为依据；应用市场版本、开发分支与历史安装包可能存在差异，请以所安装版本的更新日志为准。
@@ -91,4 +93,3 @@
 感谢 [Tailscale](https://github.com/tailscale/tailscale)、[OpenHarmony Go](https://gitcode.com/openharmony-sig/ohos_golang_go) 和 [LocalSend](https://github.com/localsend/localsend) 提供的基础与参考，以及参与测试和反馈的用户。
 
 Tailscale、HarmonyOS、LocalSend 和 HosPlayer 的名称与商标归各自所有者。第三方依赖遵循各自的许可证；本仓库目前尚未提供项目级 `LICENSE`，请勿将第三方许可证视为本项目整体的授权声明。
-

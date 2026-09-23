@@ -10,6 +10,7 @@ Connect your devices, transfer files, and access remote storage and media.</p>
 
 <p align="center">
   <a href="https://appgallery.huawei.com/app/detail?id=io.github.tailscaleohos"><img src="https://img.shields.io/badge/AppGallery-Get_MeshArc-2563eb?style=for-the-badge" alt="Get MeshArc on Huawei AppGallery"></a>
+  <a href="https://github.com/flypigJ/Tailscale-OHOS/releases/latest"><img src="https://img.shields.io/badge/GitHub-Release-334155?style=for-the-badge" alt="View the latest GitHub Release"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/阅读-简体中文-334155?style=for-the-badge" alt="阅读简体中文"></a>
 </p>
 
@@ -37,6 +38,7 @@ Reach your NAS away from home, send a file from your phone to your computer, or 
 | **Move files between devices** | MeshSend integrates Taildrop sending and receiving, with an additional LocalSend service integration; follow progress, cancel, retry and manage received files. |
 | **Browse remote storage** | Browse authorized Taildrive shares and upload or download files. Available operations depend on share permissions. |
 | **Open your media library** | Detect Jellyfin, Emby and Plex services and hand server details to HosPlayer. Sign in to your media account inside the player. |
+| **Protect access on your device** | App Lock and Taildrive Folder Lock use system authentication to protect access inside MeshArc; they do not replace remote share permissions. |
 | **Feel at home on HarmonyOS** | Native ArkUI, Chinese and English, light and dark themes, and adaptive layouts for phones, tablets and 2in1 devices. |
 
 This overview describes the public source tree. AppGallery releases, development branches and historical packages may differ; check the release notes for the version you install.
@@ -92,4 +94,3 @@ Search [existing issues](https://github.com/flypigJ/Tailscale-OHOS/issues) befor
 Thanks to [Tailscale](https://github.com/tailscale/tailscale), [OpenHarmony Go](https://gitcode.com/openharmony-sig/ohos_golang_go), [LocalSend](https://github.com/localsend/localsend), and everyone testing the app and sharing feedback.
 
 Tailscale, HarmonyOS, LocalSend and HosPlayer names and marks belong to their respective owners. Third-party dependencies retain their own licenses. This repository does not currently include a project-level `LICENSE`; dependency licenses should not be read as a license grant for this project as a whole.
-

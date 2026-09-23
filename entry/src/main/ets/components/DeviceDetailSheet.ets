@@ -2,52 +2,216 @@ import { PeerPathResult } from '../services/StreamingModels';
 
 @Component
 export struct DeviceDetailSheet {
-  @Prop osDescription: string = '';
-  @Prop deviceModel: string = '';
   @Prop online: boolean = false;
+  @Prop meshConnected: boolean = false;
   @Prop path: PeerPathResult = { type: 'unknown', checkedAt: 0 };
   @Prop tailscaleAddress: string = '';
   @Prop exitNodeCapable: boolean = false;
   @Prop servicesChecking: boolean = false;
+  @Prop showSunshine: boolean = false;
+  @Prop sunshineState: string = 'unknown';
   @Prop sunshineAvailable: boolean = false;
   @Prop sunshineLaunching: boolean = false;
   @Prop mediaServiceCount: number = 0;
   @Prop mediaServiceNames: string = '';
   @Prop mediaLaunching: boolean = false;
+  @Prop serviceRefreshVisible: boolean = false;
+  @Prop localSendState: string = 'unknown';
+  @Prop localSendRefreshing: boolean = false;
   @Prop localSendAvailable: boolean = false;
   @Prop taildropAvailable: boolean = false;
   @Prop taildropOnline: boolean = false;
   @Prop taildropReady: boolean = false;
   @Prop remoteFilesEnabled: boolean = false;
-  onRefresh: () => void = () => {};
+  onRefresh: () => Promise<void> = async (): Promise<void> => {};
   onOpenStream: () => void = () => {};
   onOpenMedia: () => void = () => {};
   onOpenFileTransfer: () => void = () => {};
   onOpenRemoteFiles: () => void = () => {};
   onCopyIp: () => void = () => {};
 
-  private hasAvailableServices(): boolean {
-    return this.sunshineAvailable || this.mediaServiceCount > 0 || this.localSendAvailable ||
-      this.taildropAvailable;
+  private sunshineLabel(): ResourceStr {
+    if (!this.online) {
+      return $r('app.string.device_detail_device_offline');
+    }
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
+    if (this.servicesRefreshing()) {
+      return $r('app.string.transfer_protocol_refreshing');
+    }
+    if (this.sunshineState === 'available') {
+      return $r('app.string.device_detail_service_available');
+    }
+    if (this.sunshineState === 'unknown' || this.sunshineState === 'checking') {
+      return $r('app.string.device_status_unknown');
+    }
+    return $r('app.string.device_detail_service_unavailable');
   }
 
-  private fileTransferDescription(): ResourceStr {
-    if (this.localSendAvailable && this.taildropReady) {
-      return $r('app.string.device_detail_transfer_both_description');
+  private sunshineStatusState(): string {
+    if (!this.online) {
+      return 'offline';
     }
-    if (this.localSendAvailable) {
-      return $r('app.string.device_detail_transfer_localsend_description');
+    if (!this.meshConnected) {
+      return 'disconnected';
     }
-    if (!this.taildropOnline) {
-      return $r('app.string.device_detail_taildrop_offline');
+    if (this.servicesRefreshing()) {
+      return 'checking';
     }
-    if (!this.taildropReady) {
-      return $r('app.string.device_detail_taildrop_connect');
+    return this.sunshineState === 'available' ? 'available' : 'unavailable';
+  }
+
+  private localSendLabel(): ResourceStr {
+    if (!this.online) {
+      return $r('app.string.device_detail_device_offline');
     }
-    return $r('app.string.device_detail_transfer_tailsend_description');
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
+    if (this.servicesRefreshing()) {
+      return $r('app.string.transfer_protocol_refreshing');
+    }
+    if (this.localSendAvailable || this.localSendState === 'available') {
+      return $r('app.string.device_detail_service_available');
+    }
+    if (this.localSendState === 'unknown' || this.localSendState === 'checking') {
+      return $r('app.string.device_status_unknown');
+    }
+    return $r('app.string.device_detail_service_unavailable');
+  }
+
+  private localSendStatusState(): string {
+    if (!this.online) {
+      return 'offline';
+    }
+    if (!this.meshConnected) {
+      return 'disconnected';
+    }
+    if (this.servicesRefreshing()) {
+      return 'checking';
+    }
+    if (this.localSendAvailable || this.localSendState === 'available') {
+      return 'available';
+    }
+    return 'unavailable';
+  }
+
+  private taildropLabel(): ResourceStr {
+    if (!this.online) {
+      return $r('app.string.device_detail_device_offline');
+    }
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
+    if (this.servicesRefreshing()) {
+      return $r('app.string.transfer_protocol_refreshing');
+    }
+    return this.taildropReady ? $r('app.string.device_detail_service_available') :
+      $r('app.string.device_detail_service_unavailable');
+  }
+
+  private taildropStatusState(): string {
+    if (!this.online) {
+      return 'offline';
+    }
+    if (!this.meshConnected) {
+      return 'disconnected';
+    }
+    if (this.servicesRefreshing()) {
+      return 'checking';
+    }
+    return this.taildropReady ? 'available' : 'unavailable';
+  }
+
+  private mediaLabel(): ResourceStr {
+    if (!this.online) {
+      return $r('app.string.device_detail_device_offline');
+    }
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
+    if (this.servicesRefreshing()) {
+      return $r('app.string.transfer_protocol_refreshing');
+    }
+    return this.mediaServiceCount > 0 ?
+      $r('app.string.device_detail_media_discovered', this.mediaServiceNames) :
+      $r('app.string.device_detail_service_unavailable');
+  }
+
+  private mediaStatusState(): string {
+    if (!this.online) {
+      return 'offline';
+    }
+    if (!this.meshConnected) {
+      return 'disconnected';
+    }
+    if (this.servicesRefreshing()) {
+      return 'checking';
+    }
+    return this.mediaServiceCount > 0 ? 'available' : 'unavailable';
+  }
+
+  private taildriveLabel(): ResourceStr {
+    if (!this.online) {
+      return $r('app.string.device_detail_device_offline');
+    }
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
+    if (this.servicesRefreshing()) {
+      return $r('app.string.transfer_protocol_refreshing');
+    }
+    return this.remoteFilesEnabled ? $r('app.string.device_detail_service_available') :
+      $r('app.string.device_detail_service_unavailable');
+  }
+
+  private taildriveStatusState(): string {
+    if (!this.online) {
+      return 'offline';
+    }
+    if (!this.meshConnected) {
+      return 'disconnected';
+    }
+    if (this.servicesRefreshing()) {
+      return 'checking';
+    }
+    return this.remoteFilesEnabled ? 'available' : 'unavailable';
+  }
+
+  private servicesRefreshing(): boolean {
+    // The sheet that renders the spinner and capsules owns their visible state.
+    // Parent polling and background probes cannot toggle it asynchronously.
+    return this.serviceRefreshVisible;
+  }
+
+  private hasFileTransferAction(): boolean {
+    return this.taildropReady || this.localSendAvailable;
+  }
+
+  private hasServiceActions(): boolean {
+    if (!this.meshConnected) {
+      return false;
+    }
+    return this.sunshineAvailable || this.mediaServiceCount > 0 || this.hasFileTransferAction() ||
+      (this.online && this.remoteFilesEnabled);
+  }
+
+  private async refreshServices(): Promise<void> {
+    if (!this.meshConnected || !this.online || this.servicesRefreshing()) {
+      return;
+    }
+    try {
+      await this.onRefresh();
+    } catch (_error) {
+      // A failed service must not leave the unified sheet state latched.
+    }
   }
 
   private pathLabel(): ResourceStr {
+    if (!this.meshConnected) {
+      return $r('app.string.connection_disconnected');
+    }
     if (!this.online) {
       return $r('app.string.peer_offline');
     }
@@ -63,7 +227,7 @@ export struct DeviceDetailSheet {
     if (this.path.type === 'unreachable') {
       return $r('app.string.device_path_unreachable');
     }
-    return $r('app.string.peer_online');
+    return $r('app.string.device_status_unknown');
   }
 
   @Builder
@@ -73,61 +237,87 @@ export struct DeviceDetailSheet {
       .fontWeight(FontWeight.Medium)
       .fontColor($r('sys.color.font_primary'))
       .width('100%')
-      .padding({ left: 4, top: 8, bottom: 2 })
+      .padding({ left: 4, top: 4, bottom: 0 })
   }
 
   @Builder
-  private ServiceRow(icon: Resource, title: ResourceStr, description: ResourceStr,
-    loading: boolean, enabled: boolean, action: () => void) {
-    Row({ space: 12 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph(icon)
-          .fontSize(20)
-          .fontColor([$r('sys.color.icon_primary')])
-      }
-      .width(40)
-      .height(40)
-      .borderRadius(12)
-      .backgroundColor($r('sys.color.comp_background_tertiary'))
+  private StatusCapsule(label: ResourceStr, state: string) {
+    Stack({ alignContent: Alignment.End }) {
+      Text(label)
+        .fontSize(11)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(state === 'available' ? $r('app.color.status_success') :
+          state === 'checking' ? $r('app.color.status_warning') :
+            $r('sys.color.font_secondary'))
+        .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+        .backgroundColor(state === 'available' ? '#1837B77A' :
+          state === 'checking' ? '#18F59E0B' : '#12000000')
+        .borderRadius(12)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: 116 })
+    }
+    .width(116)
+    .height(28)
+    .align(Alignment.End)
+  }
 
-      Column({ space: 3 }) {
+  @Builder
+  private ServiceStatusRow(title: ResourceStr, label: ResourceStr, state: string) {
+    Row({ space: 12 }) {
+      Text(title)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_primary'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      this.StatusCapsule(label, state)
+    }
+    .width('100%')
+    .height(42)
+    .padding({ left: 12, right: 12 })
+  }
+
+  @Builder
+  private CompactAction(icon: Resource, title: ResourceStr, loading: boolean, action: () => void) {
+    Button({
+      type: ButtonType.Normal,
+      stateEffect: true,
+      buttonStyle: ButtonStyleMode.TEXTUAL,
+      controlSize: ControlSize.SMALL
+    }) {
+      Row({ space: 5 }) {
+        if (loading) {
+          LoadingProgress()
+            .width(16)
+            .height(16)
+            .color($r('app.color.emphasize'))
+        } else {
+          SymbolGlyph(icon)
+            .fontSize(18)
+            .fontColor([$r('app.color.emphasize')])
+        }
         Text(title)
-          .fontSize(15)
+          .fontSize(11)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('sys.color.font_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Text(description)
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      if (loading) {
-        LoadingProgress()
-          .width(18)
-          .height(18)
-          .color($r('app.color.emphasize'))
-      } else {
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(17)
-          .fontColor([$r('sys.color.icon_secondary')])
-      }
+      .alignItems(VerticalAlign.Center)
+      .justifyContent(FlexAlign.Center)
+      .width('100%')
     }
-    .width('100%')
-    .constraintSize({ minHeight: 68 })
-    .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-    .backgroundColor($r('sys.color.comp_background_primary'))
-    .borderRadius(16)
-    .enabled(enabled)
-    .opacity(enabled ? 1 : 0.48)
+    .layoutWeight(1)
+    .height(54)
+    .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+    .backgroundColor($r('app.color.surface_subtle'))
+    .border({ width: 1, color: $r('app.color.divider_subtle') })
+    .borderRadius(7)
+    .enabled(!loading)
+    .opacity(loading ? 0.58 : 1)
     .onClick(() => {
-      if (enabled) {
+      if (!loading) {
         action();
       }
     })
@@ -154,8 +344,8 @@ export struct DeviceDetailSheet {
       }
     }
     .width('100%')
-    .constraintSize({ minHeight: 48 })
-    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .constraintSize({ minHeight: 44 })
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
     .onClick(() => {
       if (actionable) {
         action();
@@ -163,116 +353,123 @@ export struct DeviceDetailSheet {
     })
   }
 
+  @Builder
+  private CopyInfoRow(label: ResourceStr, value: ResourceStr, action: () => void) {
+    Row({ space: 12 }) {
+      Text(label)
+        .fontSize(13)
+        .fontColor($r('sys.color.font_secondary'))
+      Text(value)
+        .fontSize(13)
+        .fontColor($r('sys.color.font_primary'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.End)
+      SymbolGlyph($r('sys.symbol.square_on_square_fill'))
+        .fontSize(16)
+        .fontColor([$r('sys.color.icon_secondary')])
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 44 })
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+    .onClick(action)
+  }
+
   build() {
     Scroll() {
-      Column({ space: 12 }) {
-        Column({ space: 6 }) {
-          Text(this.osDescription)
-            .fontSize(14)
-            .fontColor($r('sys.color.font_secondary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-          Row({ space: 7 }) {
-            Row()
-              .width(8)
-              .height(8)
-              .borderRadius(4)
-              .backgroundColor(this.online ? $r('app.color.status_success') :
-                $r('app.color.status_offline'))
-            Text(this.pathLabel())
-              .fontSize(13)
-              .fontColor($r('sys.color.font_primary'))
-          }
-          .width('100%')
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ left: 4, right: 4, bottom: 4 })
-
+      Column({ space: 8 }) {
         Row() {
           Text($r('app.string.device_detail_services_title'))
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('sys.color.font_primary'))
             .layoutWeight(1)
-            .padding({ left: 4, top: 8, bottom: 2 })
+            .padding({ left: 4, top: 4, bottom: 0 })
           Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
-            if (this.servicesChecking) {
+            if (this.servicesRefreshing()) {
               LoadingProgress()
                 .width(17)
                 .height(17)
-                .color($r('app.color.emphasize'))
+                .color($r('sys.color.icon_secondary'))
             } else {
               SymbolGlyph($r('sys.symbol.arrow_clockwise'))
                 .fontSize(17)
                 .fontColor([$r('sys.color.icon_secondary')])
             }
           }
-          .width(36)
-          .height(36)
-          .enabled(this.online && !this.servicesChecking)
-          .opacity(this.online ? 1 : 0.45)
+          .width(32)
+          .height(32)
+          .enabled(this.meshConnected && this.online && !this.servicesRefreshing())
+          .opacity(this.meshConnected && this.online ? 1 : 0.45)
           .accessibilityText($r('app.string.device_detail_refresh_services'))
-          .onClick(() => {
-            if (this.online && !this.servicesChecking) {
-              this.onRefresh();
-            }
-          })
+          .onClick(() => this.refreshServices())
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        if (this.sunshineAvailable) {
-          this.ServiceRow($r('sys.symbol.rectangle_on_rectangle'),
-            $r('app.string.device_detail_desktop_title'),
-            $r('app.string.device_detail_desktop_description'),
-            this.sunshineLaunching, !this.sunshineLaunching, this.onOpenStream)
-        }
-        if (this.mediaServiceCount > 0) {
-          this.ServiceRow($r('sys.symbol.video'),
-            $r('app.string.device_detail_media_title'),
-            this.mediaServiceNames,
-            this.mediaLaunching, !this.mediaLaunching, this.onOpenMedia)
-        }
-        if (this.servicesChecking) {
-          Row({ space: 10 }) {
-            LoadingProgress()
-              .width(18)
-              .height(18)
-              .color($r('app.color.emphasize'))
-            Text($r('app.string.device_detail_services_checking'))
-              .fontSize(13)
-              .fontColor($r('sys.color.font_secondary'))
-              .layoutWeight(1)
+        Column({ space: 0 }) {
+          if (this.showSunshine) {
+            this.ServiceStatusRow('Sunshine', this.sunshineLabel(), this.sunshineStatusState())
+            Divider()
+              .color($r('sys.color.comp_divider'))
+              .margin({ left: 14, right: 14 })
           }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-          .backgroundColor($r('sys.color.comp_background_primary'))
-          .borderRadius(16)
-        } else if (!this.hasAvailableServices()) {
-          Text(this.online ? $r('app.string.device_detail_services_empty') :
-            $r('app.string.device_detail_services_offline'))
-            .fontSize(13)
-            .fontColor($r('sys.color.font_secondary'))
-            .lineHeight(19)
+          this.ServiceStatusRow($r('app.string.media_services_label'), this.mediaLabel(),
+            this.mediaStatusState())
+          Divider()
+            .color($r('sys.color.comp_divider'))
+            .margin({ left: 14, right: 14 })
+          this.ServiceStatusRow('Taildrop', this.taildropLabel(), this.taildropStatusState())
+          Divider()
+            .color($r('sys.color.comp_divider'))
+            .margin({ left: 14, right: 14 })
+          this.ServiceStatusRow('LocalSend', this.localSendLabel(), this.localSendStatusState())
+          Divider()
+            .color($r('sys.color.comp_divider'))
+            .margin({ left: 14, right: 14 })
+          this.ServiceStatusRow('Taildrive', this.taildriveLabel(), this.taildriveStatusState())
+
+          if (this.hasServiceActions()) {
+            Divider()
+              .color($r('sys.color.comp_divider'))
+            Column({ space: 6 }) {
+              Row({ space: 6 }) {
+                if (this.sunshineAvailable) {
+                  this.CompactAction($r('sys.symbol.rectangle_on_rectangle'),
+                    $r('app.string.device_detail_remote_desktop_title'), this.sunshineLaunching,
+                    this.onOpenStream)
+                }
+                if (this.mediaServiceCount > 0) {
+                  this.CompactAction($r('sys.symbol.video'),
+                    $r('app.string.device_detail_media_title'), this.mediaLaunching,
+                    this.onOpenMedia)
+                }
+              }
+              .width('100%')
+
+              Row({ space: 6 }) {
+                if (this.hasFileTransferAction()) {
+                  this.CompactAction($r('sys.symbol.doc'),
+                    $r('app.string.device_detail_transfer_title'), false,
+                    this.onOpenFileTransfer)
+                }
+                if (this.online && this.remoteFilesEnabled) {
+                  this.CompactAction($r('sys.symbol.folder'),
+                    $r('app.string.device_detail_remote_files_title'), false,
+                    this.onOpenRemoteFiles)
+                }
+              }
+              .width('100%')
+            }
             .width('100%')
-            .padding(16)
-            .backgroundColor($r('sys.color.comp_background_primary'))
-            .borderRadius(16)
+            .padding(6)
+          }
         }
-
-        if (this.localSendAvailable || this.taildropAvailable) {
-          this.ServiceRow($r('sys.symbol.doc'),
-            $r('app.string.device_detail_transfer_title'),
-            this.fileTransferDescription(), false, this.localSendAvailable || this.taildropReady,
-            this.onOpenFileTransfer)
-        }
-
-        this.SectionTitle($r('app.string.taildrive_title'))
-        this.ServiceRow($r('sys.symbol.folder'), 'Taildrive',
-          $r('app.string.taildrive_subtitle'), false, this.remoteFilesEnabled,
-          this.onOpenRemoteFiles)
+        .width('100%')
+        .backgroundColor($r('sys.color.comp_background_primary'))
+        .borderRadius(16)
+        .clip(true)
 
         this.SectionTitle($r('app.string.device_detail_network_title'))
         Column({ space: 0 }) {
@@ -281,7 +478,8 @@ export struct DeviceDetailSheet {
             Divider()
               .color($r('sys.color.comp_divider'))
               .margin({ left: 14, right: 14 })
-            this.InfoRow('Tailscale IP', this.tailscaleAddress, true, this.onCopyIp)
+            this.CopyInfoRow($r('app.string.network_sheet_local_address'), this.tailscaleAddress,
+              this.onCopyIp)
           }
           if (this.exitNodeCapable) {
             Divider()
@@ -296,33 +494,25 @@ export struct DeviceDetailSheet {
         .borderRadius(16)
         .clip(true)
 
-        this.SectionTitle($r('app.string.device_detail_device_title'))
-        Column({ space: 0 }) {
-          this.InfoRow($r('app.string.device_detail_system_label'), this.osDescription, false)
-          if (this.deviceModel.length > 0) {
-            Divider()
-              .color($r('sys.color.comp_divider'))
-              .margin({ left: 14, right: 14 })
-            this.InfoRow($r('app.string.device_detail_model_label'), this.deviceModel, false)
-          }
-        }
-        .width('100%')
-        .backgroundColor($r('sys.color.comp_background_primary'))
-        .borderRadius(16)
-        .clip(true)
-
         Blank()
           .width('100%')
-          .height(28)
+          .height(16)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 16, right: 16, top: 8, bottom: 24 })
+      .padding({ left: 14, right: 14, top: 4, bottom: 16 })
     }
     .width('100%')
     .height('100%')
     .edgeEffect(EdgeEffect.Spring)
-    .scrollBar(BarState.Auto)
+    .scrollBar(BarState.Off)
+    .nestedScroll({
+      // Keep the half-modal detent/title fixed while the detail page scrolls.
+      // The sheet can still take over once the content reaches its edge.
+      scrollForward: NestedScrollMode.SELF_FIRST,
+      scrollBackward: NestedScrollMode.SELF_FIRST
+    })
+    .align(Alignment.TopStart)
     .backgroundColor($r('sys.color.background_secondary'))
   }
 }

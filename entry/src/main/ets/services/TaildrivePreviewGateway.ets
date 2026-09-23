@@ -36,11 +36,9 @@ export class TaildrivePreviewGateway {
   }
 
   prepareDownload(context: common.Context, entry: TaildriveEntry): string {
-    const root: string = this.root(context);
-    fileIo.mkdirSync(root, true);
     const path: string = this.previewPath(context, entry);
     const thumbnailPath: string = this.thumbnailPath(path);
-    this.removeIfPresent(path);
+    this.prepareDestination(path);
     this.removeIfPresent(thumbnailPath);
     return path;
   }
@@ -64,7 +62,8 @@ export class TaildrivePreviewGateway {
   }
 
   private previewPath(context: common.Context, entry: TaildriveEntry): string {
-    return `${this.root(context)}/${this.cacheKey(entry)}-${this.safeName(entry.name)}`;
+    // Keep cache keys in directories so the opened file retains its remote name.
+    return `${this.root(context)}/${this.cacheKey(entry)}/${this.safeName(entry.name)}`;
   }
 
   private thumbnailPath(sourcePath: string): string {
