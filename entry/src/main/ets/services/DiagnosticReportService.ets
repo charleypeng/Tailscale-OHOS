@@ -25,6 +25,38 @@ export interface DiagnosticReportInput {
   signedIn: boolean;
   routeAll: boolean;
   exitNodeAllowLANAccess: boolean;
+  quickTransferDiagnosticsEnabled: boolean;
+  serviceMonitoringDiagnosticsEnabled: boolean;
+  securityDiagnosticsEnabled: boolean;
+  appearanceDiagnosticsEnabled: boolean;
+  localSendAvailableCount: number;
+  localSendCheckingCount: number;
+  localSendUnavailableCount: number;
+  meshArcReceiverState: string;
+  meshArcReceiverProtocol: string;
+  meshArcReceiverSentCount: number;
+  meshArcReceiverRegisteredCount: number;
+  mediaAvailablePeerCount: number;
+  mediaServiceCount: number;
+  hosPlayerSelfTestState: string;
+  serviceMonitoringActive: boolean;
+  serviceRefreshInProgress: boolean;
+  serviceLastRefreshAgeSeconds: number;
+  mediaCheckingPeerCount: number;
+  sunshineAvailablePeerCount: number;
+  sunshineCheckingPeerCount: number;
+  taildropState: string;
+  appLockEnabled: boolean;
+  folderLockEnabled: boolean;
+  lockedFolderCount: number;
+  appLockRequired: boolean;
+  securityAuthenticationInProgress: boolean;
+  customBackgroundEnabled: boolean;
+  immersiveColorEnabled: boolean;
+  glowLevel: number;
+  homeLayoutMode: string;
+  visibleNavigationTabCount: number;
+  navigationBottomMargin: number;
 }
 
 export interface DiagnosticReportResult {
@@ -98,6 +130,65 @@ interface DiagnosticTunCounters {
   writeErrors: number;
 }
 
+interface DiagnosticFeatureSelection {
+  quickTransferHosPlayer: boolean;
+  serviceMonitoring: boolean;
+  security: boolean;
+  appearance: boolean;
+}
+
+interface DiagnosticQuickTransferHosPlayer {
+  included: boolean;
+  localSendAvailableCount: number;
+  localSendCheckingCount: number;
+  localSendUnavailableCount: number;
+  meshArcReceiverState: string;
+  meshArcReceiverProtocol: string;
+  meshArcReceiverSentCount: number;
+  meshArcReceiverRegisteredCount: number;
+  mediaAvailablePeerCount: number;
+  mediaServiceCount: number;
+  hosPlayerSelfTestState: string;
+}
+
+interface DiagnosticServiceMonitoring {
+  included: boolean;
+  pollingActive: boolean;
+  refreshInProgress: boolean;
+  lastRefreshAgeSeconds: number;
+  mediaCheckingPeerCount: number;
+  sunshineAvailablePeerCount: number;
+  sunshineCheckingPeerCount: number;
+  taildropState: string;
+}
+
+interface DiagnosticSecurity {
+  included: boolean;
+  appLockEnabled: boolean;
+  folderLockEnabled: boolean;
+  lockedFolderCount: number;
+  appLockRequired: boolean;
+  authenticationInProgress: boolean;
+}
+
+interface DiagnosticAppearance {
+  included: boolean;
+  customBackgroundEnabled: boolean;
+  immersiveColorEnabled: boolean;
+  glowLevel: number;
+  homeLayoutMode: string;
+  visibleNavigationTabCount: number;
+  navigationBottomMargin: number;
+}
+
+interface DiagnosticFeatures {
+  selection: DiagnosticFeatureSelection;
+  quickTransferHosPlayer: DiagnosticQuickTransferHosPlayer;
+  serviceMonitoring: DiagnosticServiceMonitoring;
+  security: DiagnosticSecurity;
+  appearance: DiagnosticAppearance;
+}
+
 interface DiagnosticReportPrivacy {
   rawHiLogIncluded: boolean;
   rawBackendSnapshotIncluded: boolean;
@@ -114,6 +205,7 @@ interface DiagnosticReport {
   status: DiagnosticStatusSet;
   vpnConfig: DiagnosticVpnConfig;
   tunCounters: DiagnosticTunCounters;
+  features: DiagnosticFeatures;
   events: DiagnosticEvent[];
   privacy: DiagnosticReportPrivacy;
 }
@@ -179,7 +271,7 @@ export class DiagnosticReportService {
     input: DiagnosticReportInput): DiagnosticReport {
     const model: string = DiagnosticReportService.deviceModel();
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       generatedAt: generatedAt.toISOString(),
       device: {
         brand: DiagnosticReportService.safeLabel(deviceInfo.brand, 'unknown'),
@@ -213,12 +305,76 @@ export class DiagnosticReportService {
       },
       vpnConfig: DiagnosticReportService.readVpnConfig(filesDir),
       tunCounters: DiagnosticReportService.readTunCounters(input.vpnStatus),
+      features: DiagnosticReportService.buildFeatures(input),
       events: DiagnosticEventStore.load(filesDir),
       privacy: {
         rawHiLogIncluded: false,
         rawBackendSnapshotIncluded: false,
         identityFieldsIncluded: false,
         networkAddressesIncluded: false
+      }
+    };
+  }
+
+  private static buildFeatures(input: DiagnosticReportInput): DiagnosticFeatures {
+    const quick: boolean = input.quickTransferDiagnosticsEnabled;
+    const monitoring: boolean = input.serviceMonitoringDiagnosticsEnabled;
+    const security: boolean = input.securityDiagnosticsEnabled;
+    const appearance: boolean = input.appearanceDiagnosticsEnabled;
+    return {
+      selection: {
+        quickTransferHosPlayer: quick,
+        serviceMonitoring: monitoring,
+        security: security,
+        appearance: appearance
+      },
+      quickTransferHosPlayer: {
+        included: quick,
+        localSendAvailableCount: quick ? DiagnosticReportService.nonNegative(input.localSendAvailableCount) : 0,
+        localSendCheckingCount: quick ? DiagnosticReportService.nonNegative(input.localSendCheckingCount) : 0,
+        localSendUnavailableCount: quick ? DiagnosticReportService.nonNegative(input.localSendUnavailableCount) : 0,
+        meshArcReceiverState: quick ? DiagnosticReportService.safeToken(input.meshArcReceiverState, 'unknown') : 'excluded',
+        meshArcReceiverProtocol: quick ? DiagnosticReportService.safeToken(input.meshArcReceiverProtocol, 'unknown') : 'excluded',
+        meshArcReceiverSentCount: quick ? DiagnosticReportService.nonNegative(input.meshArcReceiverSentCount) : 0,
+        meshArcReceiverRegisteredCount: quick ?
+          DiagnosticReportService.nonNegative(input.meshArcReceiverRegisteredCount) : 0,
+        mediaAvailablePeerCount: quick ? DiagnosticReportService.nonNegative(input.mediaAvailablePeerCount) : 0,
+        mediaServiceCount: quick ? DiagnosticReportService.nonNegative(input.mediaServiceCount) : 0,
+        hosPlayerSelfTestState: quick ?
+          DiagnosticReportService.safeToken(input.hosPlayerSelfTestState, 'not_run') : 'excluded'
+      },
+      serviceMonitoring: {
+        included: monitoring,
+        pollingActive: monitoring && input.serviceMonitoringActive,
+        refreshInProgress: monitoring && input.serviceRefreshInProgress,
+        lastRefreshAgeSeconds: monitoring ?
+          DiagnosticReportService.nonNegative(input.serviceLastRefreshAgeSeconds) : 0,
+        mediaCheckingPeerCount: monitoring ?
+          DiagnosticReportService.nonNegative(input.mediaCheckingPeerCount) : 0,
+        sunshineAvailablePeerCount: monitoring ?
+          DiagnosticReportService.nonNegative(input.sunshineAvailablePeerCount) : 0,
+        sunshineCheckingPeerCount: monitoring ?
+          DiagnosticReportService.nonNegative(input.sunshineCheckingPeerCount) : 0,
+        taildropState: monitoring ? DiagnosticReportService.safeToken(input.taildropState, 'unknown') : 'excluded'
+      },
+      security: {
+        included: security,
+        appLockEnabled: security && input.appLockEnabled,
+        folderLockEnabled: security && input.folderLockEnabled,
+        lockedFolderCount: security ? DiagnosticReportService.nonNegative(input.lockedFolderCount) : 0,
+        appLockRequired: security && input.appLockRequired,
+        authenticationInProgress: security && input.securityAuthenticationInProgress
+      },
+      appearance: {
+        included: appearance,
+        customBackgroundEnabled: appearance && input.customBackgroundEnabled,
+        immersiveColorEnabled: appearance && input.immersiveColorEnabled,
+        glowLevel: appearance ? DiagnosticReportService.bounded(input.glowLevel, 0, 3) : 0,
+        homeLayoutMode: appearance ? DiagnosticReportService.safeToken(input.homeLayoutMode, 'unknown') : 'excluded',
+        visibleNavigationTabCount: appearance ?
+          DiagnosticReportService.nonNegative(input.visibleNavigationTabCount) : 0,
+        navigationBottomMargin: appearance ?
+          DiagnosticReportService.bounded(input.navigationBottomMargin, 0, 128) : 0
       }
     };
   }
@@ -372,6 +528,52 @@ export class DiagnosticReportService {
       `Write errors: ${report.tunCounters.writeErrors}`,
       `Structured events: ${report.events.length}`,
       '',
+      'Feature diagnostics selection',
+      `Quick Transfer and HosPlayer: ${report.features.selection.quickTransferHosPlayer}`,
+      `Service monitoring: ${report.features.selection.serviceMonitoring}`,
+      `Security: ${report.features.selection.security}`,
+      `Appearance: ${report.features.selection.appearance}`,
+      '',
+      'Quick Transfer and HosPlayer (redacted counts and state only)',
+      `Included: ${report.features.quickTransferHosPlayer.included}`,
+      `LocalSend: ${report.features.quickTransferHosPlayer.localSendAvailableCount} available / ` +
+        `${report.features.quickTransferHosPlayer.localSendCheckingCount} checking / ` +
+        `${report.features.quickTransferHosPlayer.localSendUnavailableCount} unavailable`,
+      `MeshArc receiver: ${report.features.quickTransferHosPlayer.meshArcReceiverState} / ` +
+        `${report.features.quickTransferHosPlayer.meshArcReceiverProtocol}`,
+      `Receiver delivery: ${report.features.quickTransferHosPlayer.meshArcReceiverRegisteredCount} registered / ` +
+        `${report.features.quickTransferHosPlayer.meshArcReceiverSentCount} sent`,
+      `Media: ${report.features.quickTransferHosPlayer.mediaAvailablePeerCount} peers / ` +
+        `${report.features.quickTransferHosPlayer.mediaServiceCount} services`,
+      `HosPlayer self-test: ${report.features.quickTransferHosPlayer.hosPlayerSelfTestState}`,
+      '',
+      'Online service monitoring',
+      `Included: ${report.features.serviceMonitoring.included}`,
+      `Polling active: ${report.features.serviceMonitoring.pollingActive}`,
+      `Refresh in progress: ${report.features.serviceMonitoring.refreshInProgress}`,
+      `Last refresh age: ${report.features.serviceMonitoring.lastRefreshAgeSeconds} seconds`,
+      `Media checking: ${report.features.serviceMonitoring.mediaCheckingPeerCount}`,
+      `Sunshine: ${report.features.serviceMonitoring.sunshineAvailablePeerCount} available / ` +
+        `${report.features.serviceMonitoring.sunshineCheckingPeerCount} checking`,
+      `Taildrop: ${report.features.serviceMonitoring.taildropState}`,
+      '',
+      'Application security',
+      `Included: ${report.features.security.included}`,
+      `App lock enabled: ${report.features.security.appLockEnabled}`,
+      `Security folder enabled: ${report.features.security.folderLockEnabled}`,
+      `Locked folder count: ${report.features.security.lockedFolderCount}`,
+      `App lock required: ${report.features.security.appLockRequired}`,
+      `Authentication in progress: ${report.features.security.authenticationInProgress}`,
+      '',
+      'Appearance',
+      `Included: ${report.features.appearance.included}`,
+      `Custom background configured: ${report.features.appearance.customBackgroundEnabled}`,
+      `Immersive color enabled: ${report.features.appearance.immersiveColorEnabled}`,
+      `Glow level: ${report.features.appearance.glowLevel}`,
+      `Home layout: ${report.features.appearance.homeLayoutMode}`,
+      `Visible navigation tabs: ${report.features.appearance.visibleNavigationTabCount}`,
+      `Navigation bottom margin: ${report.features.appearance.navigationBottomMargin}`,
+      '',
       'Privacy',
       'This archive excludes raw HiLog, raw backend snapshots, authentication data, account identity,',
       'tailnet/device/peer names, network addresses, endpoints, and absolute application paths.'
@@ -407,6 +609,13 @@ export class DiagnosticReportService {
 
   private static nonNegative(value: number): number {
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  }
+
+  private static bounded(value: number, minimum: number, maximum: number): number {
+    if (!Number.isFinite(value)) {
+      return minimum;
+    }
+    return Math.min(maximum, Math.max(minimum, Math.floor(value)));
   }
 
   private static fileStamp(value: Date): string {

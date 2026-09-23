@@ -28,6 +28,7 @@ enum class AsyncInputOperation {
     TaildriveStat,
     TaildriveMutate,
     TaildriveDownload,
+    TaildriveManualDownload,
     TaildriveUpload
 };
 
@@ -124,6 +125,8 @@ void ExecuteAsyncInput(napi_env env, void* data)
         message = TSBackendTaildriveMutate(const_cast<char*>(work->input.c_str()));
     } else if (work->operation == AsyncInputOperation::TaildriveDownload) {
         message = TSBackendTaildriveDownload(const_cast<char*>(work->input.c_str()));
+    } else if (work->operation == AsyncInputOperation::TaildriveManualDownload) {
+        message = TSBackendTaildriveManualDownload(const_cast<char*>(work->input.c_str()));
     } else {
         message = TSBackendTaildriveUpload(const_cast<char*>(work->input.c_str()));
     }
@@ -401,6 +404,14 @@ napi_value BackendTaildriveUploadAsync(napi_env env, napi_callback_info info)
         "TailscaleBackendTaildriveUpload");
 }
 
+napi_value BackendTaildriveManualDownloadAsync(napi_env env, napi_callback_info info)
+{
+    return BackendTaildriveRequestAsync(env, info, AsyncInputOperation::TaildriveManualDownload,
+        "backendTaildriveManualDownloadAsync requires one request",
+        "Failed to read the Taildrive manual download request",
+        "TailscaleBackendTaildriveManualDownload");
+}
+
 napi_value BackendTaildriveTransferSnapshotAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -418,6 +429,13 @@ napi_value BackendSnapshotAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
     return CreateAsyncStringPromise(env, TSBackendSnapshot, "TailscaleBackendSnapshot");
+}
+
+napi_value BackendLocalSendRefreshAsync(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    return CreateAsyncStringPromise(
+        env, TSBackendLocalSendRefresh, "TailscaleBackendLocalSendRefresh");
 }
 
 napi_value BackendTaildropIncomingSnapshotAsync(napi_env env, napi_callback_info info)
@@ -971,6 +989,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"backendLogout", nullptr, BackendLogout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStatus", nullptr, BackendStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendSnapshot", nullptr, BackendSnapshotAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"backendLocalSendRefreshAsync", nullptr, BackendLocalSendRefreshAsync, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
         {"backendTaildropIncomingSnapshot", nullptr, BackendTaildropIncomingSnapshotAsync,
             nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStopAsync", nullptr, BackendStopAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1013,6 +1033,8 @@ static napi_value Init(napi_env env, napi_value exports)
             napi_default, nullptr},
         {"backendTaildriveDownloadAsync", nullptr, BackendTaildriveDownloadAsync, nullptr, nullptr, nullptr,
             napi_default, nullptr},
+        {"backendTaildriveManualDownloadAsync", nullptr, BackendTaildriveManualDownloadAsync,
+            nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendTaildriveUploadAsync", nullptr, BackendTaildriveUploadAsync, nullptr, nullptr, nullptr,
             napi_default, nullptr},
         {"backendTaildriveTransferSnapshotAsync", nullptr, BackendTaildriveTransferSnapshotAsync,

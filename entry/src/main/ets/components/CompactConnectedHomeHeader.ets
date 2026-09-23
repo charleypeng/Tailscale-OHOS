@@ -16,6 +16,7 @@ export struct CompactConnectedHomeHeader {
   onExitNodeInfo: () => void = () => {};
   onExitNodeSelect: (index: number) => void = (_index: number) => {};
   @BuilderParam connectionButton: () => void;
+  @BuilderParam trafficBackdrop: () => void;
 
   build() {
     Column({ space: 6 }) {
@@ -46,16 +47,7 @@ export struct CompactConnectedHomeHeader {
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Start)
         .onClick(this.onDetails)
-        if (this.connected) {
-          SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize(18)
-            .fontColor([$r('sys.color.icon_secondary')])
-            .width(42)
-            .height(42)
-            .onClick(this.onDetails)
-        } else {
-          this.connectionButton()
-        }
+        this.connectionButton()
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -78,11 +70,10 @@ export struct CompactConnectedHomeHeader {
           .width('100%')
           .padding({ left: 10, right: 10 })
         }
-        .width('100%')
-        .height(38)
-        .padding({ left: 10, right: 10 })
-        .alignItems(VerticalAlign.Center)
-        .backgroundColor($r('sys.color.comp_background_tertiary'))
+      .width('100%')
+      .height(38)
+      .padding({ left: 10, right: 10 })
+      .backgroundColor($r('sys.color.comp_background_tertiary'))
         .borderRadius(12)
         .onClick(this.onDetails)
       }

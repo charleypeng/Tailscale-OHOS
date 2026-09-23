@@ -1,7 +1,5 @@
 @Component
 export struct ConnectionDetailsSheet {
-  @Prop tailnetName: string = '';
-  @Prop deviceName: string = '';
   @Prop tailscaleAddress: string = '';
   @Prop duration: string = '';
   @Prop downloadRate: string = '';
@@ -9,10 +7,19 @@ export struct ConnectionDetailsSheet {
   @Prop downloadTotal: string = '';
   @Prop uploadTotal: string = '';
   @Prop exitNodeName: string = '';
+  @Prop exitNodeAvailableCount: number = 0;
   @Prop allowLanAccess: boolean = false;
-  @Prop disconnecting: boolean = false;
   onCopyAddress: () => void = () => {};
-  onDisconnect: () => void = () => {};
+
+  private exitNodeLabel(): ResourceStr {
+    if (this.exitNodeName.length > 0) {
+      return this.exitNodeName;
+    }
+    if (this.exitNodeAvailableCount > 0) {
+      return $r('app.string.network_sheet_not_used_available', this.exitNodeAvailableCount);
+    }
+    return $r('app.string.network_sheet_not_used');
+  }
 
   @Builder
   private SectionTitle(title: ResourceStr): void {
@@ -39,8 +46,8 @@ export struct ConnectionDetailsSheet {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.End)
       if (actionable) {
-        SymbolGlyph($r('sys.symbol.doc'))
-          .fontSize(15)
+        SymbolGlyph($r('sys.symbol.square_on_square_fill'))
+          .fontSize(16)
           .fontColor([$r('sys.color.icon_secondary')])
       }
     }
@@ -57,48 +64,16 @@ export struct ConnectionDetailsSheet {
   build() {
     Scroll() {
       Column({ space: 12 }) {
-        Row({ space: 10 }) {
-          Row()
-            .width(9)
-            .height(9)
-            .borderRadius(5)
-            .backgroundColor($r('app.color.status_success'))
-          Column({ space: 2 }) {
-            Text($r('app.string.connection_connected'))
-              .fontSize(17)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('sys.color.font_primary'))
-            Text(this.tailnetName.length > 0 ? this.tailnetName : this.deviceName)
-              .fontSize(12)
-              .fontColor($r('sys.color.font_secondary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-        }
-        .width('100%')
-        .padding({ left: 4, right: 4, bottom: 4 })
-
         this.SectionTitle($r('app.string.network_sheet_network_title'))
         Column({ space: 0 }) {
-          this.DetailRow($r('app.string.network_sheet_device_label'), this.deviceName)
           if (this.tailscaleAddress.length > 0) {
+            this.DetailRow($r('app.string.network_sheet_local_address'), this.tailscaleAddress,
+              true, this.onCopyAddress)
             Divider()
               .color($r('sys.color.comp_divider'))
               .margin({ left: 14, right: 14 })
-            this.DetailRow($r('app.string.network_sheet_local_address'), this.tailscaleAddress,
-              true, this.onCopyAddress)
           }
-          Divider()
-            .color($r('sys.color.comp_divider'))
-            .margin({ left: 14, right: 14 })
-          this.DetailRow($r('app.string.exit_node_title'),
-            this.exitNodeName.length > 0 ? this.exitNodeName : $r('app.string.network_sheet_not_used'))
-          Divider()
-            .color($r('sys.color.comp_divider'))
-            .margin({ left: 14, right: 14 })
-          this.DetailRow('DNS', $r('app.string.network_sheet_tailnet_default'))
+          this.DetailRow($r('app.string.exit_node_title'), this.exitNodeLabel())
           Divider()
             .color($r('sys.color.comp_divider'))
             .margin({ left: 14, right: 14 })
@@ -129,39 +104,9 @@ export struct ConnectionDetailsSheet {
         .borderRadius(16)
         .clip(true)
 
-        Button({
-          type: ButtonType.ROUNDED_RECTANGLE,
-          stateEffect: true,
-          buttonStyle: ButtonStyleMode.NORMAL
-        }) {
-          Row({ space: 8 }) {
-            if (this.disconnecting) {
-              LoadingProgress()
-                .width(18)
-                .height(18)
-                .color($r('app.color.status_error'))
-            }
-            Text($r('app.string.action_disconnect'))
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.status_error'))
-          }
-          .justifyContent(FlexAlign.Center)
-          .width('100%')
-        }
-        .width('100%')
-        .height(46)
-        .enabled(!this.disconnecting)
-        .opacity(this.disconnecting ? 0.55 : 1)
-        .onClick(() => {
-          if (!this.disconnecting) {
-            this.onDisconnect();
-          }
-        })
-
         Blank()
           .width('100%')
-          .height(24)
+          .height(28)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -171,6 +116,11 @@ export struct ConnectionDetailsSheet {
     .height('100%')
     .edgeEffect(EdgeEffect.Spring)
     .scrollBar(BarState.Auto)
+    .nestedScroll({
+      scrollForward: NestedScrollMode.PARENT_FIRST,
+      scrollBackward: NestedScrollMode.SELF_FIRST
+    })
+    .align(Alignment.TopStart)
     .backgroundColor($r('sys.color.background_secondary'))
   }
 }

@@ -4,10 +4,13 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { vibrator } from '@kit.SensorServiceKit';
 import { systemShare } from '@kit.ShareKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import {
   BlurStrategy,
+  DividerShowType,
   HdsNavigation,
+  HdsNavigationAttribute,
   HdsNavigationTitleMode,
   TextStyleMode,
   hdsMaterial
@@ -32,6 +35,11 @@ import {
   TaildriveCachedPreview,
   TaildrivePreviewGateway
 } from '../services/TaildrivePreviewGateway';
+import { AppSecurityAuthenticator } from '../services/AppSecurityAuthenticator';
+import { AppSecurityPreferences } from '../services/AppSecurityPreferences';
+import { APP_FOREGROUND_EVENT } from '../services/AppLifecycleEvents';
+import { DiagnosticEventStore } from '../services/DiagnosticEventStore';
+import { MotionTokens } from './MotionTokens';
 
 interface TaildriveEntryGroup {
   key: string;
@@ -52,6 +60,10 @@ interface TaildriveThumbnailModel {
 }
 
 const TAILDRIVE_AUTO_PREVIEW_LIMIT_BYTES: number = 5 * 1024 * 1024;
+const TAILDRIVE_REFRESH_INTERVAL_MS: number = 30000;
+const TAILDRIVE_LOG_DOMAIN: number = 0x0000;
+const TAILDRIVE_LOG_TAG: string = 'TaildrivePreview';
+const TAILDRIVE_SECURITY_LOG_TAG: string = 'TaildriveSecurity';
 
 class TaildriveListDataSource implements IDataSource {
   private data: TaildriveListItemModel[] = [];
@@ -91,13 +103,21 @@ export struct TaildriveBrowser {
   @Prop bottomInset: number = 0;
   @Prop titleBarPadding: number = 16;
   @Prop materialLevel: hdsMaterial.MaterialLevel = hdsMaterial.MaterialLevel.ADAPTIVE;
+  @Prop transparentBackground: boolean = false;
   @Prop targetMachineName: string = '';
+  @Prop targetTailnetName: string = '';
+  @Prop @Watch('onFolderLockEnabledChanged') folderLockEnabled: boolean = false;
+  @Prop @Watch('onAppLockActiveChanged') appLockActive: boolean = false;
+  @StorageLink('taildriveLockedFolderPaths') @Watch('onLockedFolderPathsChanged') lockedFolderPaths: string[] = [];
   @Prop @Watch('onTargetRequestChanged') targetRequestId: number = 0;
+  @StorageLink('taildriveFilesTabActive') @Watch('onFilesTabActiveChanged') private filesTabActive: boolean = false;
   @StorageLink('taildriveBackRequest') @Watch('onBackRequestChanged') backRequest: number = 0;
   @State private path: string = '/';
   @State private entries: TaildriveEntry[] = [];
   @State private loading: boolean = false;
   @State private busy: boolean = false;
+  @State private previewDownloading: boolean = false;
+  @State private manualDownloadCount: number = 0;
   @State private reason: string = '';
   @State private status: string = '';
   @State private searchQuery: string = '';
@@ -137,8 +157,17 @@ export struct TaildriveBrowser {
   private readonly listDataSource: TaildriveListDataSource = new TaildriveListDataSource();
   contentScroller: Scroller = new Scroller();
   private breadcrumbScroller: Scroller = new Scroller();
+  private nextTransferRequestId: number = Date.now();
+  private previewRequestId: number = 0;
+  private previewGeneration: number = 0;
   private transferTimer: number = -1;
+  private transferPollInFlight: boolean = false;
   private statusTimer: number = -1;
+  private refreshTimer: number = -1;
+  private refreshInFlight: boolean = false;
+  private targetOpenInFlight: boolean = false;
+  private lastTargetRequestId: number = 0;
+  private deferredTargetRequestId: number = 0;
   private lastNotifiedProgress: number = -1;
   private retryKind: string = '';
   private retryDownloadEntry: TaildriveEntry | undefined = undefined;
@@ -151,24 +180,41 @@ export struct TaildriveBrowser {
   private movingEntry: TaildriveEntry | undefined = undefined;
   private lastBackRequest: number = 0;
   private thumbnailWorkPaths: string[] = [];
+  private folderAccessGrants: string[] = [];
+  private folderAccessAuthenticationInFlight: boolean = false;
+  private folderPolicyAuthenticationInFlight: boolean = false;
+  private protectedFolderResumePending: boolean = false;
+  private protectedFolderResumeInFlight: boolean = false;
+  private securityResumeTimer: number = -1;
+  private appForegroundListener: () => void = () => this.handleAppForeground();
 
   aboutToAppear(): void {
     this.gateway.configure(this.context());
     this.gateway.cleanupStaleStaging(this.stagingRoot());
+    this.context().eventHub.on(APP_FOREGROUND_EVENT, this.appForegroundListener);
     this.thumbnails = [];
     this.updateBackState();
     if (!this.connected) {
       return;
     }
     if (this.targetRequestId > 0 && this.targetMachineName.length > 0) {
-      this.openTargetMachine();
-    } else {
+      this.requestTargetMachineOpen();
+    } else if (this.filesTabActive) {
       this.refresh();
+    }
+    if (this.filesTabActive) {
+      this.startRefreshPolling();
     }
   }
 
   aboutToDisappear(): void {
+    this.context().eventHub.off(APP_FOREGROUND_EVENT, this.appForegroundListener);
+    this.clearSecurityResumeTimer();
+    this.folderAccessGrants = [];
+    this.protectedFolderResumePending = false;
+    this.cancelPreviewDownload();
     this.stopTransferPolling();
+    this.stopRefreshPolling();
     this.clearStatusTimer();
     clearTaildriveProgress();
     AppStorage.setOrCreate('taildriveUiBackActive', false);
@@ -188,13 +234,21 @@ export struct TaildriveBrowser {
   private onConnectedChanged(): void {
     if (this.connected) {
       if (this.targetRequestId > 0 && this.targetMachineName.length > 0) {
-        this.openTargetMachine();
-      } else {
+        this.requestTargetMachineOpen();
+      } else if (this.filesTabActive) {
         this.refresh();
       }
+      if (this.filesTabActive) {
+        this.startRefreshPolling();
+      }
     } else {
+      this.stopRefreshPolling();
+      this.folderAccessGrants = [];
+      this.protectedFolderResumePending = false;
       this.entries = [];
       this.loading = false;
+      this.searchVisible = false;
+      this.exitSelectionMode();
       this.reason = 'backend_unavailable';
       this.status = '';
     }
@@ -202,7 +256,86 @@ export struct TaildriveBrowser {
 
   private onTargetRequestChanged(): void {
     if (this.connected && this.targetRequestId > 0 && this.targetMachineName.length > 0) {
-      this.openTargetMachine();
+      this.requestTargetMachineOpen();
+    }
+  }
+
+  private onFilesTabActiveChanged(): void {
+    if (!this.filesTabActive) {
+      this.stopRefreshPolling();
+      this.folderAccessGrants = [];
+      if (this.protectedFolderRoot(this.path).length > 0) {
+        this.blockProtectedFolderContent();
+      }
+      return;
+    }
+    if (!this.connected) {
+      return;
+    }
+    this.startRefreshPolling();
+    if (this.protectedFolderResumePending || !this.hasFolderAccess(this.path)) {
+      this.resumeProtectedFolderAccess();
+      return;
+    }
+    if (this.targetOpenInFlight) {
+      return;
+    }
+    if (this.targetRequestId > this.lastTargetRequestId && this.targetMachineName.length > 0) {
+      this.requestTargetMachineOpen();
+    } else {
+      this.refresh();
+    }
+  }
+
+  private onFolderLockEnabledChanged(): void {
+    this.folderAccessGrants = [];
+    if (!this.folderLockEnabled) {
+      this.protectedFolderResumePending = false;
+      if (this.filesTabActive && this.connected) {
+        this.refresh();
+      }
+      return;
+    }
+    if (this.protectedFolderRoot(this.path).length > 0) {
+      this.blockProtectedFolderContent();
+      if (this.filesTabActive) {
+        this.resumeProtectedFolderAccess();
+      }
+    }
+  }
+
+  private onLockedFolderPathsChanged(): void {
+    this.folderAccessGrants = [];
+    if (this.folderLockEnabled && this.protectedFolderRoot(this.path).length > 0) {
+      this.blockProtectedFolderContent();
+    }
+  }
+
+  private onAppLockActiveChanged(): void {
+    if (!this.appLockActive && this.protectedFolderResumePending && this.filesTabActive) {
+      this.resumeProtectedFolderAccess();
+    }
+  }
+
+  private handleAppForeground(): void {
+    this.folderAccessGrants = [];
+    if (!this.folderLockEnabled || this.protectedFolderRoot(this.path).length === 0) {
+      return;
+    }
+    this.blockProtectedFolderContent();
+    this.clearSecurityResumeTimer();
+    this.securityResumeTimer = setTimeout((): void => {
+      this.securityResumeTimer = -1;
+      if (this.filesTabActive && !this.appLockActive) {
+        this.resumeProtectedFolderAccess();
+      }
+    }, 250);
+  }
+
+  private clearSecurityResumeTimer(): void {
+    if (this.securityResumeTimer >= 0) {
+      clearTimeout(this.securityResumeTimer);
+      this.securityResumeTimer = -1;
     }
   }
 
@@ -267,14 +400,45 @@ export struct TaildriveBrowser {
     return `${this.context().cacheDir}/taildrive-staging`;
   }
 
-  private async openTargetMachine(): Promise<void> {
-    if (!this.connected || this.loading || this.busy) {
+  private requestTargetMachineOpen(): void {
+    if (!this.connected || this.busy || this.targetRequestId <= this.lastTargetRequestId) {
       return;
     }
+    if (this.loading || this.refreshInFlight || this.targetOpenInFlight) {
+      this.deferredTargetRequestId = Math.max(this.deferredTargetRequestId, this.targetRequestId);
+      return;
+    }
+    const requestId: number = this.targetRequestId;
+    this.lastTargetRequestId = requestId;
+    this.deferredTargetRequestId = 0;
+    this.openTargetMachine(requestId);
+  }
+
+  private async openTargetMachine(requestId: number): Promise<void> {
+    if (!this.connected || this.busy) {
+      return;
+    }
+    const startedAtMs: number = Date.now();
+    this.targetOpenInFlight = true;
     this.loading = true;
     this.reason = '';
     this.status = '';
     try {
+      const directPath: string = this.directTargetMachinePath();
+      if (directPath.length > 0) {
+        if (!await this.ensureFolderAccess(directPath)) {
+          return;
+        }
+        const direct: TaildriveListResult = await this.gateway.list(directPath);
+        if (direct.state === 'ready') {
+          this.applyListResult(direct, directPath);
+          this.clearRetry();
+          hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+            'target open completed. route=direct durationMs=%{public}s',
+            (Date.now() - startedAtMs).toString());
+          return;
+        }
+      }
       const root: TaildriveListResult = await this.gateway.list('/');
       if (root.state !== 'ready') {
         this.reason = root.reason.length > 0 ? root.reason : 'list_failed';
@@ -282,11 +446,12 @@ export struct TaildriveBrowser {
         return;
       }
       let targetPath: string = '';
-      for (let index: number = 0; index < root.entries.length && targetPath.length === 0; index++) {
-        const tailnet: TaildriveEntry = root.entries[index];
-        if (tailnet.kind !== 'directory') {
-          continue;
-        }
+      const tailnets: TaildriveEntry[] = root.entries.filter((entry: TaildriveEntry) =>
+        entry.kind === 'directory');
+      tailnets.sort((left: TaildriveEntry, right: TaildriveEntry) =>
+        this.tailnetMatchPriority(right.name) - this.tailnetMatchPriority(left.name));
+      for (let index: number = 0; index < tailnets.length && targetPath.length === 0; index++) {
+        const tailnet: TaildriveEntry = tailnets[index];
         const machines: TaildriveListResult = await this.gateway.list(tailnet.path);
         if (machines.state !== 'ready') {
           continue;
@@ -306,17 +471,58 @@ export struct TaildriveBrowser {
         this.clearRetry();
         return;
       }
+      if (!await this.ensureFolderAccess(targetPath)) {
+        return;
+      }
       this.path = targetPath;
       this.updateBackState();
       this.clearRetry();
+      const target: TaildriveListResult = await this.gateway.list(targetPath);
+      if (target.state !== 'ready') {
+        this.reason = target.reason.length > 0 ? target.reason : 'list_failed';
+        this.setRetry('target');
+        return;
+      }
+      this.applyListResult(target, targetPath);
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+        'target open completed. route=fallback durationMs=%{public}s',
+        (Date.now() - startedAtMs).toString());
     } catch (_error) {
       this.reason = 'backend_unavailable';
       this.setRetry('target');
       return;
     } finally {
       this.loading = false;
+      this.targetOpenInFlight = false;
+      if (this.deferredTargetRequestId > requestId) {
+        this.requestTargetMachineOpen();
+      }
     }
-    await this.refresh();
+  }
+
+  private directTargetMachinePath(): string {
+    const tailnetName: string = this.targetTailnetName.trim();
+    const normalizedMachine: string = this.normalizedMachineName(this.targetMachineName);
+    const machineName: string = normalizedMachine.split('.')[0];
+    if (!this.validName(tailnetName) || !this.validName(machineName)) {
+      return '';
+    }
+    return this.joinPath(this.joinPath('/', tailnetName), machineName);
+  }
+
+  private tailnetMatchPriority(name: string): number {
+    return name.trim().toLowerCase() === this.targetTailnetName.trim().toLowerCase() ? 1 : 0;
+  }
+
+  private applyListResult(result: TaildriveListResult, fallbackPath: string): void {
+    this.path = result.path.length > 0 ? result.path : fallbackPath;
+    this.entries = result.entries;
+    this.refreshThumbnails(result.entries);
+    this.updateBackState();
+    this.selectedPaths = this.selectedPaths.filter((path: string) =>
+      result.entries.some((entry: TaildriveEntry) => entry.path === path));
+    this.rebuildListDataSource();
+    this.reason = '';
   }
 
   private machineNamesMatch(left: string, right: string): boolean {
@@ -333,24 +539,24 @@ export struct TaildriveBrowser {
     return name;
   }
 
-  private async refresh(minimumIndicatorMs: number = 0): Promise<void> {
-    if (!this.connected || this.loading) {
+  private async refresh(minimumIndicatorMs: number = 0, silent: boolean = false): Promise<void> {
+    if (!this.connected || this.refreshInFlight || this.targetOpenInFlight) {
+      return;
+    }
+    if (!this.hasFolderAccess(this.path)) {
+      this.blockProtectedFolderContent();
       return;
     }
     const startedAtMs: number = Date.now();
-    this.loading = true;
+    this.refreshInFlight = true;
+    if (!silent) {
+      this.loading = true;
+    }
     this.reason = '';
     try {
       const result: TaildriveListResult = await this.gateway.list(this.path);
       if (result.state === 'ready') {
-        this.path = result.path.length > 0 ? result.path : this.path;
-        this.entries = result.entries;
-        this.refreshThumbnails(result.entries);
-        this.updateBackState();
-        this.selectedPaths = this.selectedPaths.filter((path: string) =>
-          result.entries.some((entry: TaildriveEntry) => entry.path === path));
-        this.rebuildListDataSource();
-        this.reason = '';
+        this.applyListResult(result, this.path);
         if (this.retryKind === 'refresh') {
           this.clearRetry();
         }
@@ -366,12 +572,18 @@ export struct TaildriveBrowser {
       if (remainingIndicatorMs > 0) {
         await new Promise<void>((resolve: () => void) => setTimeout(resolve, remainingIndicatorMs));
       }
-      this.loading = false;
+      if (!silent) {
+        this.loading = false;
+      }
+      this.refreshInFlight = false;
+      if (this.targetRequestId > this.lastTargetRequestId && this.targetMachineName.length > 0) {
+        this.requestTargetMachineOpen();
+      }
     }
   }
 
   private async openEntry(entry: TaildriveEntry): Promise<void> {
-    if (this.busy || !this.connected) {
+    if (!this.connected) {
       return;
     }
     if (this.selectionMode) {
@@ -379,6 +591,12 @@ export struct TaildriveBrowser {
       return;
     }
     if (entry.kind === 'directory') {
+      if (this.busy) {
+        return;
+      }
+      if (!await this.ensureFolderAccess(entry.path)) {
+        return;
+      }
       this.path = entry.path;
       this.updateBackState();
       this.searchQuery = '';
@@ -391,14 +609,266 @@ export struct TaildriveBrowser {
     await this.openFileForPreview(entry);
   }
 
+  private folderPathSegments(remotePath: string): number {
+    return remotePath.split('/').filter((segment: string) => segment.length > 0).length;
+  }
+
+  private normalizeFolderPath(remotePath: string): string {
+    const normalized: string = remotePath.trim().replace(/\/+$/, '');
+    return normalized.length > 0 ? normalized : '/';
+  }
+
+  // /tailnet/device is the first lockable path. Tailnet names remain navigation-only.
+  private canLockFolder(entry: TaildriveEntry): boolean {
+    return entry.kind === 'directory' && this.folderPathSegments(entry.path) >= 2;
+  }
+
+  private isFolderDirectlyLocked(remotePath: string): boolean {
+    const normalized: string = this.normalizeFolderPath(remotePath);
+    return this.lockedFolderPaths.some((path: string) =>
+      this.normalizeFolderPath(path) === normalized);
+  }
+
+  private pathIsWithin(remotePath: string, folderPath: string): boolean {
+    const normalizedPath: string = this.normalizeFolderPath(remotePath);
+    const normalizedFolder: string = this.normalizeFolderPath(folderPath);
+    return normalizedPath === normalizedFolder || normalizedPath.startsWith(`${normalizedFolder}/`);
+  }
+
+  private protectedFolderRoot(remotePath: string): string {
+    if (!this.folderLockEnabled) {
+      return '';
+    }
+    const matching: string[] = this.lockedFolderPaths
+      .map((path: string) => this.normalizeFolderPath(path))
+      .filter((path: string) => this.pathIsWithin(remotePath, path));
+    matching.sort((left: string, right: string) => right.length - left.length);
+    return matching.length > 0 ? matching[0] : '';
+  }
+
+  private protectedFolderRootsTouching(remotePath: string): string[] {
+    if (!this.folderLockEnabled) {
+      return [];
+    }
+    const normalized: string = this.normalizeFolderPath(remotePath);
+    return this.lockedFolderPaths
+      .map((path: string) => this.normalizeFolderPath(path))
+      .filter((path: string, index: number, paths: string[]) =>
+        paths.indexOf(path) === index &&
+        (this.pathIsWithin(normalized, path) || this.pathIsWithin(path, normalized)));
+  }
+
+  private hasFolderAccess(remotePath: string): boolean {
+    const protectedRoot: string = this.protectedFolderRoot(remotePath);
+    return protectedRoot.length === 0 || this.folderAccessGrants.includes(protectedRoot);
+  }
+
+  private blockProtectedFolderContent(): void {
+    this.protectedFolderResumePending = true;
+    this.entries = [];
+    this.thumbnails = [];
+    this.thumbnailWorkPaths = [];
+    this.exitSelectionMode();
+    this.rebuildListDataSource();
+  }
+
+  private async resumeProtectedFolderAccess(): Promise<void> {
+    if (!this.connected || !this.filesTabActive || this.appLockActive ||
+      !this.protectedFolderResumePending || this.protectedFolderResumeInFlight) {
+      return;
+    }
+    this.protectedFolderResumeInFlight = true;
+    try {
+      const protectedRoot: string = this.protectedFolderRoot(this.path);
+      if (protectedRoot.length === 0) {
+        this.protectedFolderResumePending = false;
+        await this.refresh();
+        return;
+      }
+      const passed: boolean = await this.ensureFolderAccess(this.path);
+      if (passed) {
+        this.protectedFolderResumePending = false;
+        await this.refresh();
+        return;
+      }
+      this.protectedFolderResumePending = false;
+      this.path = this.parentPath(protectedRoot);
+      this.updateBackState();
+      await this.refresh();
+    } finally {
+      this.protectedFolderResumeInFlight = false;
+    }
+  }
+
+  private async ensureFolderAccess(remotePath: string): Promise<boolean> {
+    const protectedRoot: string = this.protectedFolderRoot(remotePath);
+    if (protectedRoot.length === 0 || this.folderAccessGrants.includes(protectedRoot)) {
+      return true;
+    }
+    if (this.folderAccessAuthenticationInFlight) {
+      return false;
+    }
+    this.folderAccessAuthenticationInFlight = true;
+    this.recordSecurityDiagnostic('folder_access_auth_started', 'protected_folder');
+    try {
+      const title: string = this.context().resourceManager.getStringSync(
+        $r('app.string.security_folder_authentication_title').id);
+      const passed: boolean = await AppSecurityAuthenticator.authenticate(title);
+      if (passed) {
+        this.folderAccessGrants = [...this.folderAccessGrants, protectedRoot];
+        this.recordSecurityDiagnostic('folder_access_auth_completed', 'passed');
+      } else {
+        this.showTransientStatus('folder_authentication_failed');
+        this.recordSecurityDiagnostic('folder_access_auth_completed', 'failed');
+      }
+      return passed;
+    } finally {
+      this.folderAccessAuthenticationInFlight = false;
+    }
+  }
+
+  private async ensureProtectedMutationAccess(remotePath: string): Promise<boolean> {
+    const protectedRoots: string[] = this.protectedFolderRootsTouching(remotePath);
+    for (let index: number = 0; index < protectedRoots.length; index++) {
+      if (!await this.ensureFolderAccess(protectedRoots[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async ensureMutationRequestAccess(request: TaildriveMutationRequest): Promise<boolean> {
+    if (!await this.ensureProtectedMutationAccess(request.path)) {
+      return false;
+    }
+    if (request.newPath === undefined) {
+      return true;
+    }
+    return await this.ensureFolderAccess(request.newPath);
+  }
+
+  private normalizeLockedFolderList(paths: string[]): string[] {
+    const normalized: string[] = [];
+    paths.map((path: string) => this.normalizeFolderPath(path))
+      .filter((path: string) => path !== '/')
+      .sort((left: string, right: string) => left.length - right.length)
+      .forEach((path: string) => {
+        if (!normalized.some((parent: string) => this.pathIsWithin(path, parent))) {
+          normalized.push(path);
+        }
+      });
+    return normalized;
+  }
+
+  private async reconcileLockedFoldersAfterMutation(request: TaildriveMutationRequest): Promise<boolean> {
+    const sourcePath: string = this.normalizeFolderPath(request.path);
+    let next: string[] = [...this.lockedFolderPaths];
+    if (request.operation === 'delete') {
+      next = next.filter((path: string) => !this.pathIsWithin(path, sourcePath));
+    } else if ((request.operation === 'rename' || request.operation === 'move') &&
+      request.newPath !== undefined) {
+      const targetPath: string = this.normalizeFolderPath(request.newPath);
+      next = next.map((path: string) => {
+        const normalizedPath: string = this.normalizeFolderPath(path);
+        if (!this.pathIsWithin(normalizedPath, sourcePath)) {
+          return normalizedPath;
+        }
+        return `${targetPath}${normalizedPath.substring(sourcePath.length)}`;
+      });
+    } else {
+      return true;
+    }
+    next = this.normalizeLockedFolderList(next);
+    const current: string[] = this.normalizeLockedFolderList(this.lockedFolderPaths);
+    if (JSON.stringify(next) === JSON.stringify(current)) {
+      return true;
+    }
+    try {
+      await AppSecurityPreferences.saveLockedFolderPaths(this.context(), next);
+      AppStorage.setOrCreate('taildriveLockedFolderPaths', next);
+      this.recordSecurityDiagnostic('folder_policy_reconciled', request.operation, next.length);
+      return true;
+    } catch (_error) {
+      // Keep the current session aligned with the already-completed remote mutation.
+      AppStorage.setOrCreate('taildriveLockedFolderPaths', next);
+      this.recordSecurityDiagnostic('folder_policy_reconcile_failed', request.operation, next.length);
+      return false;
+    }
+  }
+
+  private toggleFolderLock(entry: TaildriveEntry): void {
+    if (!this.canChangeFolderLock(entry) || this.folderPolicyAuthenticationInFlight) {
+      return;
+    }
+    this.updateFolderLock(entry);
+  }
+
+  private canChangeFolderLock(entry: TaildriveEntry): boolean {
+    if (!this.canLockFolder(entry)) {
+      return false;
+    }
+    const protectedRoot: string = this.protectedFolderRoot(entry.path);
+    return protectedRoot.length === 0 || this.isFolderDirectlyLocked(entry.path);
+  }
+
+  private async updateFolderLock(entry: TaildriveEntry): Promise<void> {
+    this.folderPolicyAuthenticationInFlight = true;
+    const normalized: string = this.normalizeFolderPath(entry.path);
+    const operation: string = this.isFolderDirectlyLocked(normalized) ? 'unlock' : 'lock';
+    this.recordSecurityDiagnostic('folder_policy_auth_started', operation);
+    try {
+      const title: string = this.context().resourceManager.getStringSync(
+        $r('app.string.security_settings_authentication_title').id);
+      const passed: boolean = await AppSecurityAuthenticator.authenticate(title);
+      if (!passed) {
+        this.showTransientStatus('folder_authentication_failed');
+        this.recordSecurityDiagnostic('folder_policy_auth_completed', 'failed');
+        return;
+      }
+      const next: string[] = this.isFolderDirectlyLocked(normalized) ?
+        this.lockedFolderPaths.filter((path: string) => this.normalizeFolderPath(path) !== normalized) :
+        [...this.lockedFolderPaths, normalized];
+      await AppSecurityPreferences.saveLockedFolderPaths(this.context(), next);
+      AppStorage.setOrCreate('taildriveLockedFolderPaths', next);
+      this.folderAccessGrants = [];
+      this.recordSecurityDiagnostic('folder_policy_changed', operation, next.length);
+    } catch (_error) {
+      this.recordSecurityDiagnostic('folder_policy_change_failed', operation);
+      this.showTransientStatus('security_settings_save_failed');
+    } finally {
+      this.folderPolicyAuthenticationInFlight = false;
+    }
+  }
+
+  private recordSecurityDiagnostic(event: string, phase: string, code: number = 0): void {
+    hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_SECURITY_LOG_TAG,
+      'event=%{public}s phase=%{public}s code=%{public}d', event, phase, code);
+    try {
+      DiagnosticEventStore.record(this.context().filesDir, 'ui', event, phase, code);
+    } catch (_error) {
+      // Security diagnostics are best-effort and never block folder access.
+    }
+  }
+
   private async openFileForPreview(entry: TaildriveEntry): Promise<void> {
+    if (!await this.ensureFolderAccess(entry.path)) {
+      return;
+    }
+    // A new preview supersedes an unfinished preview download. This does not
+    // touch manual exports, which use a separate transfer channel.
+    await this.cancelPreviewDownload();
     const cached: TaildriveCachedPreview | undefined =
       this.previewGateway.cachedPreview(this.context(), entry);
+    hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+      'open requested. cached=%{public}s size=%{public}d',
+      cached === undefined ? 'false' : 'true', entry.size);
     if (cached !== undefined) {
       if (cached.thumbnailPath.length > 0) {
         this.setThumbnail(entry, cached.thumbnailPath);
       }
-      await this.openSystemPreview(entry, cached.path);
+      // The external preview ability may keep its Promise pending until it
+      // exits. It must not keep this file-row action pending either.
+      this.openSystemPreview(entry, cached.path).catch(() => {});
       return;
     }
     if (entry.size >= 0 && entry.size < TAILDRIVE_AUTO_PREVIEW_LIMIT_BYTES) {
@@ -421,17 +891,44 @@ export struct TaildriveBrowser {
 
   private async downloadForPreview(entry: TaildriveEntry,
     openAfterDownload: boolean = true): Promise<void> {
-    if (this.busy || !this.connected) {
+    if (!this.connected) {
+      hilog.warn(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download skipped before cleanup: disconnected');
       return;
     }
-    const requestId: number = Date.now();
-    const root: string = this.previewGateway.root(this.context());
-    const localPath: string = this.previewGateway.prepareDownload(this.context(), entry);
-    this.busy = true;
+    if (!await this.ensureFolderAccess(entry.path)) {
+      return;
+    }
+    hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download cleanup started');
+    await this.cancelPreviewDownload();
+    hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download cleanup returned');
+    if (!this.connected) {
+      hilog.warn(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download skipped after cleanup: disconnected');
+      return;
+    }
+    const generation: number = ++this.previewGeneration;
+    const requestId: number = this.newTransferRequestId();
+    let root: string = '';
+    let localPath: string = '';
+    try {
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download destination preparation started');
+      root = this.previewGateway.root(this.context());
+      localPath = this.previewGateway.prepareDownload(this.context(), entry);
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download destination preparation completed');
+    } catch (_error) {
+      hilog.error(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'download destination preparation failed');
+      this.status = 'preview_download_failed';
+      this.retryPreviewEntry = entry;
+      this.setRetry('preview');
+      return;
+    }
+    this.previewRequestId = requestId;
+    this.previewDownloading = true;
     this.status = 'preview_downloading';
     this.clearRetry();
     this.startTransferPolling();
-    let completedPreviewPath: string = '';
+    hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+      'download requested. requestId=%{public}s', requestId.toString());
+    let downloadCompleted: boolean = false;
     try {
       const result: TaildriveTransferSnapshot = await this.gateway.download({
         requestId: requestId,
@@ -439,38 +936,91 @@ export struct TaildriveBrowser {
         localRoot: root,
         localPath: localPath
       });
+      if (generation !== this.previewGeneration) {
+        return;
+      }
       this.transfer = result;
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+        'download response. requestId=%{public}s state=%{public}s reason=%{public}s',
+        requestId.toString(), result.state, result.reason);
       if (result.state !== 'completed') {
         this.status = result.reason.length > 0 ? result.reason : 'preview_download_failed';
         this.retryPreviewEntry = entry;
         this.setRetry('preview');
-        await publishTaildriveCompletion(this.context(), entry.name, false);
         return;
       }
-      const thumbnailPath: string = await this.previewGateway.createThumbnail(
-        this.context(), entry, localPath);
-      if (thumbnailPath.length > 0) {
-        this.setThumbnail(entry, thumbnailPath);
-      }
-      completedPreviewPath = localPath;
-      this.showTransientStatus('preview_download_completed');
-      await publishTaildriveCompletion(this.context(), entry.name, true);
+      downloadCompleted = true;
     } catch (_error) {
-      this.status = 'preview_download_failed';
-      this.retryPreviewEntry = entry;
-      this.setRetry('preview');
-      await publishTaildriveCompletion(this.context(), entry.name, false);
+      hilog.error(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG,
+        'download threw. requestId=%{public}s', requestId.toString());
+      if (generation === this.previewGeneration) {
+        this.status = 'preview_download_failed';
+        this.retryPreviewEntry = entry;
+        this.setRetry('preview');
+      }
     } finally {
-      this.busy = false;
-      this.stopTransferPolling();
-      await clearTaildriveProgress();
+      if (generation === this.previewGeneration) {
+        this.previewRequestId = 0;
+        this.previewDownloading = false;
+        this.stopTransferPolling();
+        clearTaildriveProgress().catch(() => {});
+      }
     }
-    if (completedPreviewPath.length > 0 && openAfterDownload) {
-      // Release the transfer guard before handing off to a system preview
-      // ability. Some system implementations keep startAbility pending until
-      // the preview page returns; keeping busy=true here blocks later files.
-      await this.openSystemPreview(entry, completedPreviewPath);
+
+    if (generation !== this.previewGeneration) {
+      return;
     }
+    if (!downloadCompleted) {
+      publishTaildriveCompletion(this.context(), entry.name, false).catch(() => {});
+      return;
+    }
+
+    this.showTransientStatus('preview_download_completed');
+    this.previewGateway.createThumbnail(this.context(), entry, localPath)
+      .then((thumbnailPath: string) => {
+        if (thumbnailPath.length > 0) {
+          this.setThumbnail(entry, thumbnailPath);
+        }
+      })
+      .catch(() => {});
+    publishTaildriveCompletion(this.context(), entry.name, true).catch(() => {});
+
+    if (openAfterDownload) {
+      // Do not await the external preview ability. Some system previewers keep
+      // startAbility pending until the preview page returns.
+      this.openSystemPreview(entry, localPath).catch(() => {});
+    }
+  }
+
+  private newTransferRequestId(): number {
+    this.nextTransferRequestId++;
+    return this.nextTransferRequestId;
+  }
+
+  /**
+   * Cancels only the active preview transfer. Manual exports use a separate
+   * native request channel and are intentionally left running.
+   */
+  private async cancelPreviewDownload(): Promise<void> {
+    if (this.previewRequestId <= 0) {
+      return;
+    }
+    this.previewGeneration++;
+    this.previewRequestId = 0;
+    this.previewDownloading = false;
+    this.stopTransferPolling();
+    if (this.status === 'preview_downloading') {
+      this.status = '';
+    }
+    if (this.retryKind === 'preview') {
+      this.clearRetry();
+    }
+    clearTaildriveProgress().catch(() => {});
+    // Cancellation shares the control channel with progress snapshots. Never
+    // hold a later file click behind an old or slow control response.
+    this.gateway.cancel().catch(() => {
+      // The transfer may already have completed while the cancel request was queued.
+    });
   }
 
   private async openSystemPreview(entry: TaildriveEntry, localPath: string): Promise<void> {
@@ -483,15 +1033,20 @@ export struct TaildriveBrowser {
       flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION
     };
     try {
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'system preview startAbility requested');
       await this.context().startAbility(want);
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'system preview startAbility returned');
       return;
     } catch (_error) {
+      hilog.warn(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'system preview startAbility failed');
       // Some releases do not route file URIs through startAbility. Keep the
       // browser handoff as a compatibility fallback after the authorized path.
     }
     try {
       await this.context().openLink(uri, { appLinkingOnly: false });
+      hilog.info(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'system preview openLink returned');
     } catch (_error) {
+      hilog.error(TAILDRIVE_LOG_DOMAIN, TAILDRIVE_LOG_TAG, 'system preview openLink failed');
       this.status = 'preview_failed';
     }
   }
@@ -511,6 +1066,9 @@ export struct TaildriveBrowser {
 
   private async selectUpload(): Promise<void> {
     if (!this.connected || this.busy || !this.canModifyCurrentPath()) {
+      return;
+    }
+    if (!await this.ensureFolderAccess(this.path)) {
       return;
     }
     const documentPicker = new picker.DocumentViewPicker(this.context());
@@ -543,6 +1101,9 @@ export struct TaildriveBrowser {
     if (this.pendingUpload === undefined || this.pendingUploadPath.length === 0) {
       this.status = 'file_unavailable';
       this.clearRetry();
+      return;
+    }
+    if (!await this.ensureFolderAccess(this.pendingUploadPath)) {
       return;
     }
     const staged: PreparedTaildriveFile = this.pendingUpload;
@@ -613,14 +1174,19 @@ export struct TaildriveBrowser {
   }
 
   private async download(entry: TaildriveEntry): Promise<void> {
-    const requestId: number = Date.now();
+    if (!this.connected || entry.kind !== 'file') {
+      return;
+    }
+    if (!await this.ensureFolderAccess(entry.path)) {
+      return;
+    }
+    const requestId: number = this.newTransferRequestId();
     const root: string = this.stagingRoot();
     const requestDir: string = `${root}/${requestId}`;
     const localPath: string = `${requestDir}/download.taildrive`;
-    this.busy = true;
+    this.manualDownloadCount++;
     this.status = 'downloading';
     this.clearRetry();
-    this.startTransferPolling();
     try {
       fileIo.mkdirSync(root, true);
       fileIo.mkdirSync(requestDir, true);
@@ -629,8 +1195,7 @@ export struct TaildriveBrowser {
         remotePath: entry.path,
         localRoot: root,
         localPath: localPath
-      });
-      this.transfer = result;
+      }, true);
       if (result.state !== 'completed') {
         this.status = result.reason.length > 0 ? result.reason : 'download_failed';
         this.retryDownloadEntry = entry;
@@ -666,9 +1231,7 @@ export struct TaildriveBrowser {
       await publishTaildriveCompletion(this.context(), entry.name, false);
     } finally {
       this.cleanupDirectory(requestDir);
-      this.busy = false;
-      this.stopTransferPolling();
-      await clearTaildriveProgress();
+      this.manualDownloadCount = Math.max(0, this.manualDownloadCount - 1);
     }
   }
 
@@ -714,6 +1277,9 @@ export struct TaildriveBrowser {
     const name: string = this.editorName.trim();
     if (!this.validName(name)) {
       this.status = 'invalid_name';
+      return;
+    }
+    if (!await this.ensureFolderAccess(this.path)) {
       return;
     }
     this.folderDialogVisible = false;
@@ -773,10 +1339,16 @@ export struct TaildriveBrowser {
   }
 
   private async deleteSelectedEntries(selected: TaildriveEntry[]): Promise<void> {
+    for (let index: number = 0; index < selected.length; index++) {
+      if (!await this.ensureProtectedMutationAccess(selected[index].path)) {
+        return;
+      }
+    }
     this.busy = true;
     this.status = 'deleting';
     this.clearRetry();
     try {
+      let lockPolicySaved: boolean = true;
       for (let index: number = 0; index < selected.length; index++) {
         const result: TaildriveMutationResult = await this.gateway.mutate({
           operation: 'delete',
@@ -786,8 +1358,11 @@ export struct TaildriveBrowser {
           this.status = result.reason.length > 0 ? result.reason : 'delete_failed';
           return;
         }
+        lockPolicySaved = await this.reconcileLockedFoldersAfterMutation({
+          operation: 'delete', path: selected[index].path
+        }) && lockPolicySaved;
       }
-      this.showTransientStatus('delete_completed');
+      this.showTransientStatus(lockPolicySaved ? 'delete_completed' : 'security_settings_save_failed');
       this.exitSelectionMode();
       await this.refresh();
     } catch (_error) {
@@ -803,6 +1378,10 @@ export struct TaildriveBrowser {
       this.status = 'invalid_name';
       return;
     }
+    const protectedPath: string = this.editorOperation === 'mkdir' ? this.path : this.editorPath;
+    if (!await this.ensureProtectedMutationAccess(protectedPath)) {
+      return;
+    }
     const targetPath: string = this.editorOperation === 'mkdir' ?
       this.joinPath(this.path, name) : this.joinPath(this.parentPath(this.editorPath), name);
     const request: TaildriveMutationRequest = this.editorOperation === 'mkdir' ?
@@ -815,13 +1394,17 @@ export struct TaildriveBrowser {
 
   private async executeMutation(request: TaildriveMutationRequest, workingStatus: string,
     completedStatus: string): Promise<void> {
+    if (!await this.ensureMutationRequestAccess(request)) {
+      return;
+    }
     this.busy = true;
     this.status = workingStatus;
     this.clearRetry();
     try {
       const result: TaildriveMutationResult = await this.gateway.mutate(request);
       if (result.state === 'completed') {
-        this.showTransientStatus(completedStatus);
+        const lockPolicySaved: boolean = await this.reconcileLockedFoldersAfterMutation(request);
+        this.showTransientStatus(lockPolicySaved ? completedStatus : 'security_settings_save_failed');
         this.retryMutation = undefined;
         await this.refresh();
       } else if ((result.reason === 'already_exists' || result.reason === 'file_exists') &&
@@ -867,6 +1450,9 @@ export struct TaildriveBrowser {
   }
 
   private async showDetails(entry: TaildriveEntry): Promise<void> {
+    if (!await this.ensureFolderAccess(entry.path)) {
+      return;
+    }
     this.detailEntry = entry;
     this.detailsVisible = true;
     this.detailsLoading = true;
@@ -889,6 +1475,9 @@ export struct TaildriveBrowser {
     if (!this.connected || this.busy || !this.canModifyCurrentPath()) {
       return;
     }
+    if (!await this.ensureProtectedMutationAccess(entry.path)) {
+      return;
+    }
     this.movingEntry = entry;
     this.moveRoot = this.shareRoot(entry.path);
     this.movePath = this.moveRoot;
@@ -899,6 +1488,10 @@ export struct TaildriveBrowser {
   private async loadMoveDirectory(): Promise<void> {
     this.moveLoading = true;
     try {
+      if (!await this.ensureFolderAccess(this.movePath)) {
+        this.moveEntries = [];
+        return;
+      }
       const result: TaildriveListResult = await this.gateway.list(this.movePath);
       this.moveEntries = result.state === 'ready' ? result.entries : [];
       if (result.state !== 'ready') {
@@ -950,6 +1543,10 @@ export struct TaildriveBrowser {
       this.moveVisible = false;
       return;
     }
+    if (!await this.ensureProtectedMutationAccess(this.movingEntry.path) ||
+      !await this.ensureFolderAccess(this.movePath)) {
+      return;
+    }
     const request: TaildriveMutationRequest = {
       operation: 'move',
       path: this.movingEntry.path,
@@ -966,7 +1563,7 @@ export struct TaildriveBrowser {
     if (this.retryKind === 'refresh') {
       await this.refresh();
     } else if (this.retryKind === 'target') {
-      await this.openTargetMachine();
+      await this.openTargetMachine(this.targetRequestId);
     } else if (this.retryKind === 'upload') {
       await this.executeUpload(false);
     } else if (this.retryKind === 'download' && this.retryDownloadEntry !== undefined) {
@@ -994,6 +1591,10 @@ export struct TaildriveBrowser {
     this.stopTransferPolling();
     this.lastNotifiedProgress = -1;
     this.transferTimer = setInterval(() => {
+      if (this.transferPollInFlight) {
+        return;
+      }
+      this.transferPollInFlight = true;
       this.gateway.transferSnapshot().then((snapshot: TaildriveTransferSnapshot) => {
         this.transfer = snapshot;
         const progress: number = snapshot.totalBytes > 0 ?
@@ -1009,7 +1610,9 @@ export struct TaildriveBrowser {
           };
           publishTaildriveProgress(this.context(), notificationTransfer);
         }
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => {
+        this.transferPollInFlight = false;
+      });
     }, 400);
   }
 
@@ -1018,6 +1621,14 @@ export struct TaildriveBrowser {
       clearInterval(this.transferTimer);
       this.transferTimer = -1;
     }
+  }
+
+  private cancelVisibleTransfer(): void {
+    if (this.previewDownloading) {
+      this.cancelPreviewDownload();
+      return;
+    }
+    this.gateway.cancel().catch(() => {});
   }
 
   private refreshThumbnails(entries: TaildriveEntry[]): void {
@@ -1043,7 +1654,14 @@ export struct TaildriveBrowser {
   private thumbnailUri(entry: TaildriveEntry): string {
     const thumbnail: TaildriveThumbnailModel | undefined = this.thumbnails.find(
       (candidate: TaildriveThumbnailModel) => candidate.remotePath === entry.path);
-    return thumbnail === undefined ? '' : thumbnail.uri;
+    if (thumbnail === undefined || thumbnail.uri.length === 0) {
+      return '';
+    }
+    try {
+      return fileIo.accessSync(thumbnail.uri) ? fileUri.getUriFromPath(thumbnail.uri) : '';
+    } catch (_error) {
+      return '';
+    }
   }
 
   private setThumbnail(entry: TaildriveEntry, thumbnailPath: string): void {
@@ -1480,48 +2098,192 @@ export struct TaildriveBrowser {
     return index >= 0 ? name.substring(index + 1).toLowerCase() : '';
   }
 
-  private fileSymbol(entry: TaildriveEntry): Resource {
-    if (entry.kind === 'directory') {
-      return $r('sys.symbol.folder');
-    }
-    const extension: string = this.fileExtension(entry.name);
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'svg'].includes(extension)) {
-      return $r('sys.symbol.picture');
-    }
-    if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', '3gp'].includes(extension)) {
-      return $r('sys.symbol.video');
-    }
-    if (extension === 'pdf') {
-      return $r('sys.symbol.pdf_doc');
-    }
-    if (['txt', 'md', 'json', 'jsonl', 'csv', 'xml', 'yaml', 'yml', 'log'].includes(extension)) {
-      return $r('sys.symbol.doc_plaintext');
-    }
-    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(extension)) {
-      return $r('sys.symbol.doc_zipper');
-    }
-    if (['hap', 'hsp', 'har', 'app', 'apk'].includes(extension)) {
-      return $r('sys.symbol.archivebox');
-    }
-    return $r('sys.symbol.doc');
+  private remotePathDepth(remotePath: string): number {
+    return remotePath.split('/').filter((segment: string) => segment.length > 0).length;
   }
 
-  private fileIconColor(entry: TaildriveEntry): ResourceColor {
+  private isWindowsDriveDirectory(entry: TaildriveEntry): boolean {
+    const kind: string = entry.kind.trim().toLowerCase();
+    const contentType: string = (entry.contentType ?? '').trim().toLowerCase();
+    if (['drive', 'disk', 'volume', 'drive_root', 'disk_root', 'filesystem_root'].includes(kind) ||
+      ['application/x-drive', 'application/x-disk', 'inode/drive', 'inode/volume',
+        'inode/mount-point'].includes(contentType)) {
+      return true;
+    }
+    return /^[A-Za-z]:[\\/]?$/.test(entry.name.trim());
+  }
+
+  private specialFolderKind(name: string): string {
+    switch (name.trim().toLowerCase()) {
+      case '桌面':
+      case 'desktop': return 'desktop';
+      case '下载':
+      case 'download':
+      case 'downloads': return 'download';
+      case '文档':
+      case '文稿':
+      case 'document':
+      case 'documents':
+      case 'docs': return 'document';
+      case '图片':
+      case '照片':
+      case 'picture':
+      case 'pictures':
+      case 'photo':
+      case 'photos':
+      case 'image':
+      case 'images': return 'picture';
+      case '音乐':
+      case 'music':
+      case 'audio': return 'music';
+      case '视频':
+      case '影片':
+      case 'video':
+      case 'videos':
+      case 'movie':
+      case 'movies': return 'video';
+      default: return '';
+    }
+  }
+
+  private directoryIcon(entry: TaildriveEntry): Resource {
+    const depth: number = this.remotePathDepth(entry.path);
+    if (depth === 1) {
+      return $r('app.media.ic_user');
+    }
+    if (depth === 2) {
+      return $r('app.media.ic_network');
+    }
+    if (depth >= 3) {
+      if (this.isWindowsDriveDirectory(entry)) {
+        return $r('app.media.ic_disk_filled');
+      }
+      switch (this.specialFolderKind(entry.name)) {
+        case 'desktop': return $r('app.media.taildrive_folder_desktop');
+        case 'download': return $r('app.media.taildrive_folder_download');
+        case 'document': return $r('app.media.taildrive_folder_document');
+        case 'picture': return $r('app.media.taildrive_folder_picture');
+        case 'music': return $r('app.media.taildrive_folder_music');
+        case 'video': return $r('app.media.taildrive_folder_video');
+      }
+    }
+    return $r('app.media.taildrive_file_folder');
+  }
+
+  private fileIcon(entry: TaildriveEntry): Resource {
     if (entry.kind === 'directory') {
-      return $r('app.color.transfer_file_icon_yellow');
+      return this.directoryIcon(entry);
     }
     const extension: string = this.fileExtension(entry.name);
-    if (extension === 'pdf' || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'svg',
-      'mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', '3gp'].includes(extension)) {
-      return $r('app.color.transfer_file_icon_red');
+    switch (extension) {
+      case '7z': return $r('app.media.ic_light_7z');
+      case 'amr': return $r('app.media.ic_light_amr');
+      case 'ape': return $r('app.media.ic_light_ape');
+      case 'app': return $r('app.media.ic_light_app');
+      case 'caj': return $r('app.media.ic_light_caj');
+      case 'ics':
+      case 'ical':
+      case 'calendar': return $r('app.media.ic_light_calendar');
+      case 'chm': return $r('app.media.ic_light_chm');
+      case 'connect':
+      case 'connection': return $r('app.media.ic_light_connect');
+      case 'crdownload':
+      case 'download':
+      case 'part':
+      case 'partial': return $r('app.media.ic_light_download');
+      case 'dwg': return $r('app.media.ic_light_dwg');
+      case 'dxf': return $r('app.media.ic_light_dxf');
+      case 'eddx': return $r('app.media.ic_light_eddx');
+      case 'eml':
+      case 'emlx':
+      case 'msg': return $r('app.media.ic_light_eml');
+      case 'emmx': return $r('app.media.ic_light_emmx');
+      case 'xls':
+      case 'xlsx':
+      case 'xlsm':
+      case 'xlsb':
+      case 'csv':
+      case 'et':
+      case 'ett':
+      case 'ods': return $r('app.media.ic_light_excel');
+      case 'exe':
+      case 'msi':
+      case 'com': return $r('app.media.ic_light_exe');
+      case 'flac': return $r('app.media.ic_light_flac');
+      case 'gz':
+      case 'gzip': return $r('app.media.ic_light_gz');
+      case 'hdoc': return $r('app.media.ic_light_hdoc');
+      case 'hinote': return $r('app.media.ic_light_hinote');
+      case 'htm': return $r('app.media.ic_light_htm');
+      case 'html':
+      case 'xhtml':
+      case 'mht':
+      case 'mhtml': return $r('app.media.ic_light_html');
+      case 'kdh': return $r('app.media.ic_light_kdh');
+      case 'log': return $r('app.media.ic_light_log');
+      case 'm4a': return $r('app.media.ic_light_m4a');
+      case 'mp3': return $r('app.media.ic_light_mp3');
+      case 'aac':
+      case 'midi':
+      case 'mid':
+      case 'ogg':
+      case 'opus': return $r('app.media.ic_light_music');
+      case 'nh': return $r('app.media.ic_light_nh');
+      case 'pdf': return $r('app.media.ic_light_pdf');
+      case 'ppt':
+      case 'pptx':
+      case 'pptm':
+      case 'pps':
+      case 'ppsx':
+      case 'dps':
+      case 'dpt':
+      case 'odp': return $r('app.media.ic_light_ppt');
+      case 'rar': return $r('app.media.ic_light_rar');
+      case 'tar': return $r('app.media.ic_light_tar');
+      case 'teb': return $r('app.media.ic_light_teb');
+      case 'txt': return $r('app.media.ic_light_txt');
+      case 'wav': return $r('app.media.ic_light_wav');
+      case 'wma': return $r('app.media.ic_light_wma');
+      case 'doc':
+      case 'docx':
+      case 'docm':
+      case 'dot':
+      case 'dotx':
+      case 'wps':
+      case 'wpt':
+      case 'odt':
+      case 'rtf': return $r('app.media.ic_light_word');
+      case 'xml':
+      case 'xsl':
+      case 'xslt': return $r('app.media.ic_light_xml');
+      case 'zip': return $r('app.media.ic_light_zip');
+      case 'bz2':
+      case 'xz':
+      case 'zst':
+      case 'lz':
+      case 'lz4':
+      case 'cab':
+      case 'iso':
+      case 'dmg': return $r('app.media.ic_light_zip_1');
+      case 'hap':
+      case 'hsp':
+      case 'har':
+      case 'apk':
+      case 'aab':
+      case 'ipa': return $r('app.media.ic_light_other_app');
     }
-    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(extension)) {
-      return $r('app.color.transfer_file_icon_yellow');
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'svg'].includes(extension)) {
+      return $r('app.media.ic_light_picture');
     }
-    if (['hap', 'hsp', 'har', 'app', 'apk'].includes(extension)) {
-      return $r('app.color.transfer_file_icon_neutral');
+    if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', '3gp'].includes(extension)) {
+      return $r('app.media.ic_light_video');
     }
-    return $r('app.color.transfer_file_icon_blue');
+    if (['md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'ini', 'conf', 'cfg', 'properties', 'sql',
+      'ets', 'ts', 'tsx', 'js', 'jsx', 'java', 'kt', 'c', 'cc', 'cpp', 'h', 'hpp', 'go', 'rs', 'py',
+      'sh', 'bat', 'cmd', 'ps1'].includes(extension)) {
+      return $r('app.media.ic_light_text');
+    }
+    return extension.length === 0 ? $r('app.media.ic_light_unknow') : $r('app.media.ic_light_other');
   }
 
   private directoryKindText(entry: TaildriveEntry): ResourceStr {
@@ -1601,7 +2363,9 @@ export struct TaildriveBrowser {
   }
 
   private setSearchVisible(visible: boolean): void {
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({
+      duration: MotionTokens.NORMAL, curve: MotionTokens.curve()
+    }, (): void => {
       this.searchVisible = visible;
       if (!visible) {
         this.searchQuery = '';
@@ -1623,7 +2387,9 @@ export struct TaildriveBrowser {
   }
 
   private toggleViewMode(): void {
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({
+      duration: MotionTokens.NORMAL, curve: MotionTokens.curve()
+    }, (): void => {
       this.viewMode = this.viewMode === 'list' ? 'grid' : 'list';
     });
   }
@@ -1670,6 +2436,8 @@ export struct TaildriveBrowser {
       case 'invalid_name': return $r('app.string.taildrive_status_invalid_name');
       case 'same_location': return $r('app.string.taildrive_status_same_location');
       case 'target_not_found': return $r('app.string.taildrive_status_target_not_found');
+      case 'folder_authentication_failed': return $r('app.string.security_authentication_failed');
+      case 'security_settings_save_failed': return $r('app.string.security_settings_save_failed');
       case 'permission_denied': return $r('app.string.taildrive_status_permission_denied');
       case 'not_found': return $r('app.string.taildrive_status_not_found');
       case 'already_exists':
@@ -1748,7 +2516,9 @@ export struct TaildriveBrowser {
     .height('100%')
     .backgroundColor('#4D000000')
     .id('taildrive-folder-dialog')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: MotionTokens.duration(180), curve: MotionTokens.curve()
+    }))
   }
 
   @Builder
@@ -2003,7 +2773,7 @@ export struct TaildriveBrowser {
           Column({ space: 8 }) {
             ForEach(this.moveDestinationEntries(), (entry: TaildriveEntry) => {
               Row({ space: 8 }) {
-                Text('📁').fontSize(18)
+                this.EntryIcon(entry, 18)
                 Text(entry.name)
                   .fontSize(13)
                   .fontColor($r('sys.color.font_primary'))
@@ -2021,6 +2791,10 @@ export struct TaildriveBrowser {
           .width('100%')
         }
         .height(220)
+        .nestedScroll({
+          scrollForward: NestedScrollMode.PARENT_FIRST,
+          scrollBackward: NestedScrollMode.SELF_FIRST
+        })
       }
       Row({ space: 10 }) {
         Text($r('app.string.cancel_action'))
@@ -2143,7 +2917,7 @@ export struct TaildriveBrowser {
           ForEach(this.displayEntries(), (entry: TaildriveEntry) => {
             Column({ space: 7 }) {
               Row({ space: 8 }) {
-                Text(entry.kind === 'directory' ? '📁' : '📄').fontSize(18)
+                this.EntryIcon(entry, 18)
                 Column({ space: 2 }) {
                   Text(entry.name)
                     .fontSize(13)
@@ -2200,7 +2974,8 @@ export struct TaildriveBrowser {
             .id(`taildrive-legacy-entry-${entry.name}`)
           }, (entry: TaildriveEntry) => entry.path)
         }
-        if (this.busy && (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
+        if ((this.busy || this.previewDownloading) &&
+          (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
           Row({ space: 8 }) {
             LoadingProgress().width(16).height(16)
             Text(this.transfer.fileName.length > 0 ? this.transfer.fileName :
@@ -2214,7 +2989,7 @@ export struct TaildriveBrowser {
             Text($r('app.string.cancel_action'))
               .fontSize(12)
               .fontColor($r('app.color.status_error'))
-              .onClick(() => this.gateway.cancel())
+              .onClick(() => this.cancelVisibleTransfer())
           }
           .width('100%')
         }
@@ -2244,31 +3019,29 @@ export struct TaildriveBrowser {
     .backgroundColor(this.standalone ? Color.Transparent : $r('app.color.surface_subtle'))
     .borderRadius(this.standalone ? 0 : 16)
     .id('taildrive-legacy-browser')
-    .bindSheet($$this.editorVisible, this.EditorSheet(), {
-      height: '31%',
-      dragBar: true,
-      showClose: true
-    })
-    .bindSheet($$this.detailsVisible, this.DetailsSheet(), {
-      height: '48%',
-      dragBar: true,
-      showClose: true
-    })
-    .bindSheet($$this.moveVisible, this.MoveSheet(), {
-      height: '62%',
-      dragBar: true,
-      showClose: true
-    })
+  }
+
+  private startRefreshPolling(): void {
+    this.stopRefreshPolling();
+    this.refreshTimer = setInterval(() => {
+      if (!this.connected || this.loading || this.busy) {
+        return;
+      }
+      this.refresh(0, true);
+    }, TAILDRIVE_REFRESH_INTERVAL_MS);
+  }
+
+  private stopRefreshPolling(): void {
+    if (this.refreshTimer >= 0) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = -1;
+    }
   }
 
   @Builder
   private EntryIcon(entry: TaildriveEntry, size: number) {
     Stack() {
-      if (entry.kind === 'directory') {
-        SymbolGlyph($r('sys.symbol.folder'))
-          .fontSize(size * 0.82)
-          .fontColor([$r('app.color.transfer_file_icon_yellow')])
-      } else if (this.thumbnailUri(entry).length > 0) {
+      if (entry.kind !== 'directory' && this.thumbnailUri(entry).length > 0) {
         Image(this.thumbnailUri(entry))
           .width(size)
           .height(size)
@@ -2276,16 +3049,10 @@ export struct TaildriveBrowser {
           .borderRadius(12)
           .clip(true)
       } else {
-        Row() {
-          SymbolGlyph(this.fileSymbol(entry))
-            .fontSize(size * 0.58)
-            .fontColor([this.fileIconColor(entry)])
-        }
-        .width(size)
-        .height(size)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.surface_subtle'))
-        .borderRadius(12)
+        Image(this.fileIcon(entry))
+          .width(size)
+          .height(size)
+          .objectFit(ImageFit.Contain)
       }
     }
     .width(size)
@@ -2370,6 +3137,11 @@ export struct TaildriveBrowser {
       }
       MenuItem({ content: $r('app.string.taildrive_multi_select_action') })
         .onClick(() => this.selectFromContextMenu(entry))
+      if (this.folderLockEnabled && this.canChangeFolderLock(entry)) {
+        MenuItem({ content: this.isFolderDirectlyLocked(entry.path) ?
+          $r('app.string.security_unlock_folder_action') : $r('app.string.security_lock_folder_action') })
+          .onClick(() => this.toggleFolderLock(entry))
+      }
       if (this.canModifyCurrentPath()) {
         MenuItem({ content: $r('app.string.taildrive_move_action') })
           .onClick(() => this.openMovePicker(entry))
@@ -2566,7 +3338,9 @@ export struct TaildriveBrowser {
       .scrollBar(BarState.Auto)
       .scrollBarWidth(3)
       .id('taildrive-list-view')
-      .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))
+      .transition(TransitionEffect.OPACITY.animation({
+        duration: MotionTokens.duration(180), curve: MotionTokens.curve()
+      }))
     } else {
       Grid(this.contentScroller) {
         LazyForEach(this.listDataSource, (item: TaildriveListItemModel) => {
@@ -2599,7 +3373,9 @@ export struct TaildriveBrowser {
       .scrollBar(BarState.Auto)
       .scrollBarWidth(3)
       .id('taildrive-grid-view')
-      .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))
+      .transition(TransitionEffect.OPACITY.animation({
+        duration: MotionTokens.duration(180), curve: MotionTokens.curve()
+      }))
     }
   }
 
@@ -2633,7 +3409,9 @@ export struct TaildriveBrowser {
     .backgroundColor($r('sys.color.comp_background_tertiary'))
     .border({ width: 1, color: $r('sys.color.comp_divider') })
     .borderRadius(23)
-    .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: MotionTokens.duration(180), curve: MotionTokens.curve()
+    }))
   }
 
   @Builder
@@ -2765,7 +3543,97 @@ export struct TaildriveBrowser {
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Auto)
+    .nestedScroll({
+      scrollForward: NestedScrollMode.PARENT_FIRST,
+      scrollBackward: NestedScrollMode.SELF_FIRST
+    })
     .id('taildrive-sort-panel')
+  }
+
+  @Builder
+  private SheetHosts() {
+    Stack() {
+      Row()
+        .width(0)
+        .height(0)
+        .id('taildrive-editor-sheet-host')
+        .bindSheet($$this.editorVisible, this.EditorSheet(), {
+          height: '31%',
+          preferType: SheetType.BOTTOM,
+          mode: SheetMode.OVERLAY,
+          dragBar: true,
+          showClose: true,
+          enableOutsideInteractive: false,
+          onDisappear: () => {
+            this.editorVisible = false;
+          }
+        })
+      Row()
+        .width(0)
+        .height(0)
+        .id('taildrive-details-sheet-host')
+        .bindSheet($$this.detailsVisible, this.DetailsSheet(), {
+          height: '60%',
+          preferType: SheetType.BOTTOM,
+          mode: SheetMode.OVERLAY,
+          dragBar: true,
+          showClose: true,
+          enableOutsideInteractive: false,
+          onDisappear: () => {
+            this.detailsVisible = false;
+          }
+        })
+      Row()
+        .width(0)
+        .height(0)
+        .id('taildrive-preview-download-sheet-host')
+        .bindSheet($$this.previewDownloadVisible, this.PreviewDownloadSheet(), {
+          height: '38%',
+          preferType: SheetType.BOTTOM,
+          mode: SheetMode.OVERLAY,
+          dragBar: true,
+          showClose: true,
+          enableOutsideInteractive: false,
+          onDisappear: () => {
+            this.previewDownloadVisible = false;
+          }
+        })
+      Row()
+        .width(0)
+        .height(0)
+        .id('taildrive-move-sheet-host')
+        .bindSheet($$this.moveVisible, this.MoveSheet(), {
+          height: '62%',
+          preferType: SheetType.BOTTOM,
+          mode: SheetMode.OVERLAY,
+          dragBar: true,
+          showClose: true,
+          enableOutsideInteractive: false,
+          onDisappear: () => {
+            this.moveVisible = false;
+          }
+        })
+      Row()
+        .width(0)
+        .height(0)
+        .id('taildrive-sort-sheet-host')
+        .bindSheet($$this.sortSheetVisible, this.SortSheet(), {
+          detents: ['58%', '72%'],
+          preferType: SheetType.BOTTOM,
+          mode: SheetMode.OVERLAY,
+          scrollSizeMode: ScrollSizeMode.CONTINUOUS,
+          dragBar: true,
+          showClose: true,
+          enableOutsideInteractive: false,
+          title: { title: $r('app.string.taildrive_sort_group_title') },
+          onDisappear: () => {
+            this.sortSheetVisible = false;
+          }
+        })
+    }
+    .width(0)
+    .height(0)
+    .id('taildrive-sheet-hosts')
   }
 
   @Builder
@@ -2834,7 +3702,7 @@ export struct TaildriveBrowser {
     }
     .width('100%')
     .height(54)
-    .animation({ duration: 220, curve: Curve.EaseOut })
+    .animation({ duration: MotionTokens.NORMAL, curve: MotionTokens.curve() })
   }
 
   @Builder
@@ -2936,7 +3804,7 @@ export struct TaildriveBrowser {
       Text($r('app.string.cancel_action'))
         .fontSize(12)
         .fontColor($r('app.color.status_error'))
-        .onClick(() => this.gateway.cancel())
+        .onClick(() => this.cancelVisibleTransfer())
     }
     .width('100%')
     .padding(14)
@@ -2993,6 +3861,9 @@ export struct TaildriveBrowser {
     const entry: TaildriveEntry | undefined = this.selectedEntry();
     if (entry === undefined || entry.kind !== 'file') {
       this.status = 'select_one_for_details';
+      return;
+    }
+    if (!await this.ensureFolderAccess(entry.path)) {
       return;
     }
     const cached: TaildriveCachedPreview | undefined =
@@ -3217,7 +4088,8 @@ export struct TaildriveBrowser {
         blurStrategy: BlurStrategy.DISABLE,
         originalStyle: {
           backgroundStyle: {
-            backgroundColor: $r('sys.color.background_secondary')
+            backgroundColor: this.transparentBackground ? Color.Transparent :
+              $r('sys.color.background_secondary')
           },
           contentStyle: {
             titleStyle: {
@@ -3233,13 +4105,14 @@ export struct TaildriveBrowser {
         }
       },
       content: {
+        divider: { showType: DividerShowType.OFF },
         title: {
           mainTitle: $r('app.string.tab_files'),
           subTitle: $r('app.string.taildrive_subtitle')
         },
         menu: {
           maxCount: 2,
-          value: this.searchVisible || this.selectionMode ? [] : [
+          value: !this.connected || this.searchVisible || this.selectionMode ? [] : [
             {
               content: {
                 label: $r('app.string.taildrive_multi_select_action'),
@@ -3271,7 +4144,8 @@ export struct TaildriveBrowser {
     .width('100%')
     .height('100%')
     .id('hds-navigation-files')
-    .backgroundColor($r('sys.color.background_secondary'))
+    .backgroundColor(this.transparentBackground ? Color.Transparent :
+      $r('sys.color.background_secondary'))
   }
 
   @Builder
@@ -3284,7 +4158,8 @@ export struct TaildriveBrowser {
           }
           this.PathBar()
           this.StandaloneEntryViewport()
-          if (this.busy && (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
+          if ((this.busy || this.previewDownloading) &&
+            (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
             this.TransferStatus()
           }
           if (this.status.length > 0 || this.retryAvailable) {
@@ -3378,7 +4253,8 @@ export struct TaildriveBrowser {
         } else {
           this.EntryGroups()
         }
-        if (this.busy && (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
+        if ((this.busy || this.previewDownloading) &&
+          (this.transfer.state === 'queued' || this.transfer.state === 'transferring')) {
           this.TransferStatus()
         }
       }
@@ -3401,58 +4277,18 @@ export struct TaildriveBrowser {
         if (this.folderDialogVisible) {
           this.FolderDialog()
         }
+        this.SheetHosts()
       }
       .width('100%')
       .height('100%')
-      .bindSheet($$this.editorVisible, this.EditorSheet(), {
-        height: '31%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.detailsVisible, this.DetailsSheet(), {
-        height: '60%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.previewDownloadVisible, this.PreviewDownloadSheet(), {
-        height: '38%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.moveVisible, this.MoveSheet(), {
-        height: '62%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.sortSheetVisible, this.SortSheet(), {
-        height: '66%',
-        detents: ['58%', '72%'],
-        preferType: SheetType.BOTTOM,
-        scrollSizeMode: ScrollSizeMode.CONTINUOUS,
-        dragBar: true,
-        showClose: true,
-        title: { title: $r('app.string.taildrive_sort_group_title') }
-      })
     } else {
       Column() {
         this.BrowserContent()
+        this.SheetHosts()
       }
       .width('100%')
       .backgroundColor($r('app.color.surface_subtle'))
       .borderRadius(16)
-      .bindSheet($$this.editorVisible, this.EditorSheet(), {
-        height: '31%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.detailsVisible, this.DetailsSheet(), {
-        height: '60%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.previewDownloadVisible, this.PreviewDownloadSheet(), {
-        height: '38%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.moveVisible, this.MoveSheet(), {
-        height: '62%', dragBar: true, showClose: true
-      })
-      .bindSheet($$this.sortSheetVisible, this.SortSheet(), {
-        height: '66%',
-        detents: ['58%', '72%'],
-        preferType: SheetType.BOTTOM,
-        scrollSizeMode: ScrollSizeMode.CONTINUOUS,
-        dragBar: true,
-        showClose: true,
-        title: { title: $r('app.string.taildrive_sort_group_title') }
-      })
     }
   }
 }

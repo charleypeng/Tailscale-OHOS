@@ -37,7 +37,7 @@ ArkTS / ArkUI application
 
 A fresh clone is **not yet a one-command build**. Native toolchains, upstream source trees and local signing configuration are intentionally excluded from Git.
 
-1. Install DevEco Studio with the SDK and native build tools matching [the example build profile](../build-profile.example.json5). The public source baseline is HarmonyOS 6.1 / API 23 with arm64 native output.
+1. Install DevEco Studio with the complete vendor HarmonyOS SDK, including HMS and OpenHarmony components. The current build uses Release SDK `26.0.0.105` with `compileSdkVersion: 26.0.0`; compatibility and target remain HarmonyOS 6.1 / API 23, with arm64 native output. See [the example build profile](../build-profile.example.json5). An incomplete, locally assembled SDK can compile successfully yet fail at runtime when an HMS module is missing.
 2. Make DevEco Studio discoverable through `DEVECO_STUDIO_HOME`, `DEVECO_HOME`, or the standard Windows install location. `DEVECO_SDK_HOME` can select the SDK used by the build scripts.
 3. Prepare the OpenHarmony SIG Go 1.24 toolchain at `third_party/ohos-go/`, including `bin/go.exe`. The repository does not currently provide a complete toolchain-bootstrap script; ordinary desktop Go is not a substitute for this target.
 4. Check out Tailscale `v1.86.5` at `third_party/tailscale/`. The bridge's `go.mod` uses a local replacement pointing there. `scripts/build-go.ps1` checks and applies the patches from `patches/`.

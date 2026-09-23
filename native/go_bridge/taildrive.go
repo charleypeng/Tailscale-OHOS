@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -28,6 +30,9 @@ const (
 	taildriveTransferTimeout   = 30 * time.Minute
 	taildriveMaxListResponse   = 8 << 20
 	taildriveProgressBufferLen = 32 << 10
+	taildrivePeerWarmupTimeout = 5 * time.Second
+	taildrivePeerWarmupTTL     = 2 * time.Minute
+	taildriveColdProbeTimeout  = 3 * time.Second
 )
 
 var taildrivePropfindBody = []byte(`<?xml version="1.0" encoding="utf-8" ?>
@@ -450,10 +455,33 @@ func (b *backendController) taildriveList(requestText string) string {
 		return marshalTaildriveList(taildriveListResult{State: "failed", Path: "/", Reason: "invalid_request"})
 	}
 	result := taildriveListResult{State: "failed", Path: remotePath, Entries: []taildriveEntry{}}
+	b.warmTaildrivePeer(remotePath)
 	server, available := b.taildriveServer()
 	if !available {
 		result.Reason = "backend_unavailable"
 		return marshalTaildriveList(result)
+	}
+	machine, hasMachine := taildriveTargetMachine(remotePath)
+	if hasMachine && !b.taildriveDAVReady(machine) {
+		probeClient, probeClientErr := newTaildriveWebDAVClient(server)
+		if probeClientErr != nil {
+			result.Reason = classifyTaildriveError(probeClientErr)
+			return marshalTaildriveList(result)
+		}
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), taildriveColdProbeTimeout)
+		result.Entries, err = probeClient.list(probeCtx, remotePath)
+		probeTimedOut := errors.Is(probeCtx.Err(), context.DeadlineExceeded)
+		probeCancel()
+		probeClient.close()
+		if err == nil {
+			b.markTaildriveDAVReady(machine)
+			result.State = "ready"
+			return marshalTaildriveList(result)
+		}
+		if !probeTimedOut && !taildriveColdProbeRetryable(err) {
+			result.Reason = classifyTaildriveError(err)
+			return marshalTaildriveList(result)
+		}
 	}
 	client, err := newTaildriveWebDAVClient(server)
 	if err != nil {
@@ -469,6 +497,9 @@ func (b *backendController) taildriveList(requestText string) string {
 		return marshalTaildriveList(result)
 	}
 	result.State = "ready"
+	if hasMachine {
+		b.markTaildriveDAVReady(machine)
+	}
 	return marshalTaildriveList(result)
 }
 
@@ -592,6 +623,127 @@ func validateTaildriveTransferRequest(request taildriveTransferRequest) (string,
 }
 
 func (b *backendController) taildriveDownload(requestText string) string {
+	return b.taildriveDownloadWithTracking(requestText, true)
+}
+
+func taildriveTargetMachine(remotePath string) (string, bool) {
+	normalized, err := normalizeTaildrivePath(remotePath)
+	if err != nil {
+		return "", false
+	}
+	decoded, err := url.PathUnescape(normalized)
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(decoded, "/"), "/")
+	if len(parts) < 2 {
+		return "", false
+	}
+	machine := normalizedTaildriveMachineName(parts[1])
+	return machine, machine != ""
+}
+
+func normalizedTaildriveMachineName(value string) string {
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if dot := strings.IndexByte(name, '.'); dot >= 0 {
+		name = name[:dot]
+	}
+	return name
+}
+
+func taildriveColdProbeRetryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var statusErr *taildriveHTTPStatusError
+	return !errors.As(err, &statusErr)
+}
+
+// warmTaildrivePeer establishes a real Tailscale data-plane path before the
+// first remote WebDAV request. A Disco ping alone can discover a route without
+// completing the encrypted data path that PeerAPI needs, which made the first
+// two PROPFIND requests hit their full timeout on a cold VPN session.
+func (b *backendController) warmTaildrivePeer(remotePath string) {
+	machine, ok := taildriveTargetMachine(remotePath)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	b.taildriveWarmMu.Lock()
+	lastWarm := b.taildriveWarmAt[machine]
+	b.taildriveWarmMu.Unlock()
+	if !lastWarm.IsZero() && now.Sub(lastWarm) < taildrivePeerWarmupTTL {
+		return
+	}
+
+	b.mu.Lock()
+	client := b.client
+	b.mu.Unlock()
+	if client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), taildrivePeerWarmupTimeout)
+	defer cancel()
+	status, err := client.Status(ctx)
+	if err != nil {
+		return
+	}
+	var target netip.Addr
+	for _, peer := range status.Peer {
+		if normalizedTaildriveMachineName(peer.DNSName) != machine &&
+			normalizedTaildriveMachineName(peer.HostName) != machine {
+			continue
+		}
+		for _, address := range peer.TailscaleIPs {
+			if address.Is4() {
+				target = address
+				break
+			}
+			if !target.IsValid() {
+				target = address
+			}
+		}
+		break
+	}
+	if !target.IsValid() {
+		return
+	}
+	result, err := client.Ping(ctx, target, tailcfg.PingTSMP)
+	if err != nil || result == nil || result.Err != "" {
+		return
+	}
+	b.taildriveWarmMu.Lock()
+	if b.taildriveWarmAt == nil {
+		b.taildriveWarmAt = make(map[string]time.Time)
+	}
+	b.taildriveWarmAt[machine] = time.Now()
+	b.taildriveWarmMu.Unlock()
+}
+
+func (b *backendController) taildriveDAVReady(machine string) bool {
+	b.taildriveWarmMu.Lock()
+	readyAt := b.taildriveDAVReadyAt[machine]
+	b.taildriveWarmMu.Unlock()
+	return !readyAt.IsZero() && time.Since(readyAt) < taildrivePeerWarmupTTL
+}
+
+func (b *backendController) markTaildriveDAVReady(machine string) {
+	b.taildriveWarmMu.Lock()
+	if b.taildriveDAVReadyAt == nil {
+		b.taildriveDAVReadyAt = make(map[string]time.Time)
+	}
+	b.taildriveDAVReadyAt[machine] = time.Now()
+	b.taildriveWarmMu.Unlock()
+}
+
+// Manual downloads use a separate request channel and an independent context.
+// They must not occupy the preview transfer slot, because a user can start a
+// preview while a manually requested export is still downloading.
+func (b *backendController) taildriveManualDownload(requestText string) string {
+	return b.taildriveDownloadWithTracking(requestText, false)
+}
+
+func (b *backendController) taildriveDownloadWithTracking(requestText string, tracked bool) string {
 	var request taildriveTransferRequest
 	if err := json.Unmarshal([]byte(requestText), &request); err != nil {
 		return marshalTaildriveTransfer(taildriveTransferSnapshot{State: "failed", Reason: "invalid_request"})
@@ -612,50 +764,76 @@ func (b *backendController) taildriveDownload(requestText string) string {
 	}
 	defer client.close()
 	fileName := taildriveRemoteBaseName(remotePath)
-	ctx, cancel, queued := b.beginTaildriveTransfer(request.RequestID, "download", remotePath, localPath, fileName, 0)
-	if !queued {
-		return marshalTaildriveTransfer(taildriveTransferSnapshot{RequestID: request.RequestID, Direction: "download", State: "failed", Reason: "busy"})
+	startedAt := time.Now().UnixMilli()
+	totalBytes := int64(0)
+	writtenBytes := int64(0)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if tracked {
+		var queued bool
+		ctx, cancel, queued = b.beginTaildriveTransfer(request.RequestID, "download", remotePath, localPath, fileName, 0)
+		if !queued {
+			return marshalTaildriveTransfer(taildriveTransferSnapshot{RequestID: request.RequestID, Direction: "download", State: "failed", Reason: "busy"})
+		}
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), taildriveTransferTimeout)
 	}
 	defer cancel()
+	finish := func(state, reason string) taildriveTransferSnapshot {
+		if tracked {
+			return b.finishTaildriveTransfer(request.RequestID, state, reason)
+		}
+		return taildriveTransferSnapshot{
+			RequestID: request.RequestID, Direction: "download", State: state, Reason: reason,
+			RemotePath: remotePath, LocalPath: localPath, FileName: fileName,
+			Bytes: writtenBytes, TotalBytes: totalBytes, StartedAt: startedAt,
+			CompletedAt: time.Now().UnixMilli(),
+		}
+	}
+	update := func(change func(*taildriveTransferSnapshot)) {
+		if tracked {
+			b.updateTaildriveTransfer(request.RequestID, change)
+		}
+	}
 	requestURL, err := taildriveURL(remotePath)
 	if err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", "invalid_request"))
+		return marshalTaildriveTransfer(finish("failed", "invalid_request"))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
 	if err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", "invalid_request"))
+		return marshalTaildriveTransfer(finish("failed", "invalid_request"))
 	}
 	response, err := client.httpClient.Do(httpRequest)
 	if err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(&taildriveHTTPStatusError{StatusCode: response.StatusCode})))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(&taildriveHTTPStatusError{StatusCode: response.StatusCode})))
 	}
-	totalBytes := response.ContentLength
+	totalBytes = response.ContentLength
 	knownLength := totalBytes >= 0
 	if totalBytes < 0 {
 		totalBytes = 0
 	}
-	b.updateTaildriveTransfer(request.RequestID, func(snapshot *taildriveTransferSnapshot) {
+	update(func(snapshot *taildriveTransferSnapshot) {
 		snapshot.State = "transferring"
 		snapshot.TotalBytes = totalBytes
 	})
 	partPath := localPath + ".part"
 	if _, statErr := os.Lstat(localPath); statErr == nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", "file_exists"))
+		return marshalTaildriveTransfer(finish("failed", "file_exists"))
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(statErr)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(statErr)))
 	}
 	if _, statErr := os.Lstat(partPath); statErr == nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", "file_exists"))
+		return marshalTaildriveTransfer(finish("failed", "file_exists"))
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(statErr)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(statErr)))
 	}
 	file, err := os.OpenFile(partPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	completed := false
 	defer func() {
@@ -664,30 +842,29 @@ func (b *backendController) taildriveDownload(requestText string) string {
 			_ = os.Remove(partPath)
 		}
 	}()
-	writtenBytes := int64(0)
 	progressWriter := &taildriveProgressWriter{writer: file, onWrite: func(written int) {
 		writtenBytes += int64(written)
-		b.updateTaildriveTransfer(request.RequestID, func(snapshot *taildriveTransferSnapshot) {
+		update(func(snapshot *taildriveTransferSnapshot) {
 			snapshot.Bytes += int64(written)
 		})
 	}}
 	if _, err := io.CopyBuffer(progressWriter, response.Body, make([]byte, taildriveProgressBufferLen)); err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	if knownLength && writtenBytes != totalBytes {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", "network_interrupted"))
+		return marshalTaildriveTransfer(finish("failed", "network_interrupted"))
 	}
 	if err := file.Sync(); err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	if err := file.Close(); err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	if err := os.Rename(partPath, localPath); err != nil {
-		return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "failed", classifyTaildriveError(err)))
+		return marshalTaildriveTransfer(finish("failed", classifyTaildriveError(err)))
 	}
 	completed = true
-	return marshalTaildriveTransfer(b.finishTaildriveTransfer(request.RequestID, "completed", ""))
+	return marshalTaildriveTransfer(finish("completed", ""))
 }
 
 func (b *backendController) taildriveUpload(requestText string) string {

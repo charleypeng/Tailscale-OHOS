@@ -11,7 +11,10 @@ const REQUEST_FILE: string = 'media-service-probe-request.json';
 const RESPONSE_FILE: string = 'media-service-probe-response.json';
 const AVAILABLE_CACHE_TTL_MS: number = 5 * 60 * 1000;
 const NEGATIVE_CACHE_TTL_MS: number = 60 * 1000;
-const TIMEOUT_MS: number = 5500;
+// The native probe runs its three default-port checks concurrently under a
+// 2.5-second deadline. Leave a small IPC margin without holding the entire
+// device-details refresh spinner for the old 5.5-second worst case.
+const TIMEOUT_MS: number = 4000;
 
 interface MediaProbeResponse {
   requestId: number;

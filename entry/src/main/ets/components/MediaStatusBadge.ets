@@ -56,10 +56,10 @@ export struct MediaStatusBadge {
         .borderRadius(8)
         .transition(
           TransitionEffect.asymmetric(
-            TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: Curve.EaseOut })
-              .combine(TransitionEffect.translate({ y: -4 })),
-            TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: Curve.EaseIn })
-              .combine(TransitionEffect.translate({ y: -3 }))
+            TransitionEffect.OPACITY.animation({ duration: MotionTokens.NORMAL, curve: MotionTokens.curve() })
+              .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(-4) })),
+            TransitionEffect.OPACITY.animation({ duration: MotionTokens.FAST, curve: MotionTokens.curve() })
+              .combine(TransitionEffect.translate({ y: MotionTokens.amplitude(-3) }))
           )
         )
     }

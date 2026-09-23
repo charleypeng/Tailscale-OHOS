@@ -1,4 +1,15 @@
-# MeshArc 0.9.10 更新日志
+# MeshArc 更新日志
+
+## 1.1.0 · 2026-09-23
+
+- 新增 VPN 持续后台任务与真实流量通知，改进系统取消后的恢复及用户主动关闭处理。
+- 优化连接心跳与状态反馈，避免可选探测失败误报断开。
+- 修复首页长设备列表滚动、设备详情半模态手势及更新日志面板操作。
+- 更新项目中英文首页、安装入口、开发文档与贡献指南。
+
+完整中英文发布说明及包校验信息见 [1.1.0 Release Notes](docs/releases/1.1.0.md)。
+
+## 0.9.10 更新记录
 
 - 0.9.10: Peer OS versions now fall back to control-plane Node Hostinfo when the local Status projection is incomplete.
 本次更新覆盖从基线版本 0.8.41 到 0.9.9 的全部用户可见变化，以下内容按重要程度排列。

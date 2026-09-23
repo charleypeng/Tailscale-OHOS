@@ -2,229 +2,316 @@ import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { StoragePaths } from './StoragePaths';
-import { DiagnosticPrivacy } from './DiagnosticPrivacy';
+import { DiagnosticEventStore } from './DiagnosticEventStore';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'VpnBackgroundTask';
 const BUNDLE_NAME: string = 'io.github.tailscaleohos';
 const ENTRY_ABILITY_NAME: string = 'EntryAbility';
 const VPN_STATUS_FRESH_MS: number = 15000;
-const START_RETRY_INTERVAL_MS: number = 250;
-const START_RETRY_LIMIT: number = 20;
-const HEALTH_CHECK_INTERVAL_MS: number = 5000;
+const VPN_STATUS_GRACE_MS: number = 60000;
+const CONNECTION_CHECK_INTERVAL_MS: number = 1000;
+const NOTIFICATION_UPDATE_INTERVAL_MS: number = 30000;
+const START_RETRY_BASE_MS: number = 30000;
+const START_RETRY_MAX_MS: number = 300000;
+
+interface VpnRuntimeStatus {
+  state: string;
+  txBytes: number;
+  rxBytes: number;
+}
 
 export class VpnBackgroundTaskManager {
-  private isBackground: boolean = false;
-  private isStarted: boolean = false;
-  private startInFlight: boolean = false;
-  private stopInFlight: boolean = false;
+  private context?: common.UIAbilityContext;
+  private monitoring: boolean = false;
+  private operationInFlight: boolean = false;
   private listenerRegistered: boolean = false;
+  private suspendListenerRegistered: boolean = false;
   private lifecycleGeneration: number = 0;
-  private retryTimer: number = -1;
-  private healthTimer: number = -1;
+  private cancellationRevision: number = 0;
+  private monitorTimer: number = -1;
+  private task?: backgroundTaskManager.ContinuousTaskNotification;
+  private stopping: boolean = false;
+  private suppressedUntilDisconnect: boolean = false;
+  private nextStartAtMs: number = 0;
+  private retryCount: number = 0;
+  private lastLiveAtMs: number = 0;
+  private nextNotificationAtMs: number = 0;
 
   private readonly cancelCallback =
     (info: backgroundTaskManager.ContinuousTaskCancelInfo): void => {
-      this.isStarted = false;
-      this.startInFlight = false;
-      this.stopHealthCheck();
-      hilog.info(DOMAIN, TAG,
-        'VPN background task cancelled by system. id=%{public}d reason=%{public}d',
+      if (this.stopping || (this.task?.continuousTaskId !== undefined &&
+        info.id !== this.task.continuousTaskId)) {
+        return;
+      }
+      // Cancellation can arrive before startBackgroundRunning resolves.
+      this.cancellationRevision++;
+      this.task = undefined;
+      const userCancelled: boolean =
+        info.reason === backgroundTaskManager.ContinuousTaskCancelReason.USER_CANCEL ||
+        info.reason === backgroundTaskManager.ContinuousTaskCancelReason.USER_CANCEL_REMOVE_NOTIFICATION;
+      this.suppressedUntilDisconnect = userCancelled;
+      if (!userCancelled) {
+        this.scheduleRetry();
+      }
+      this.record(userCancelled ? 'background_user_cancelled' : 'background_system_cancelled', info.reason);
+      hilog.info(DOMAIN, TAG, 'VPN background task cancelled. id=%{public}d reason=%{public}d',
         info.id, info.reason);
     };
 
-  register(): void {
-    if (this.listenerRegistered) {
+  private readonly suspendCallback =
+    (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
+      if (info.continuousTaskId !== this.task?.continuousTaskId) {
+        return;
+      }
+      this.record(info.suspendState ? 'background_suspended' : 'background_resumed', info.suspendReason);
+      hilog.info(DOMAIN, TAG, 'VPN background task suspend=%{public}s reason=%{public}d',
+        `${info.suspendState}`, info.suspendReason);
+    };
+
+  register(context: common.UIAbilityContext): void {
+    if (this.monitoring) {
       return;
     }
+    this.context = context;
     try {
       backgroundTaskManager.on('continuousTaskCancel', this.cancelCallback);
       this.listenerRegistered = true;
     } catch (error) {
-      const businessError = error as BusinessError;
-      hilog.warn(DOMAIN, TAG,
-        'Failed to register continuous-task cancellation listener. code=%{public}d',
-        businessError.code ?? -1);
+      this.record('background_listener_failed', (error as BusinessError).code ?? -1);
     }
+    try {
+      backgroundTaskManager.on('continuousTaskSuspend', this.suspendCallback);
+      this.suspendListenerRegistered = true;
+    } catch (error) {
+      this.record('background_suspend_listener_failed', (error as BusinessError).code ?? -1);
+    }
+    this.monitoring = true;
+    ++this.lifecycleGeneration;
+    this.reconcile(context);
+    this.monitorTimer = setInterval(() => this.reconcile(context), CONNECTION_CHECK_INTERVAL_MS);
   }
 
   unregister(): void {
-    this.isBackground = false;
+    this.monitoring = false;
     this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
-    if (!this.listenerRegistered) {
-      return;
+    if (this.monitorTimer >= 0) {
+      clearInterval(this.monitorTimer);
+      this.monitorTimer = -1;
     }
-    try {
-      backgroundTaskManager.off('continuousTaskCancel', this.cancelCallback);
-    } catch (error) {
-      const businessError = error as BusinessError;
-      hilog.warn(DOMAIN, TAG,
-        'Failed to unregister continuous-task cancellation listener. code=%{public}d',
-        businessError.code ?? -1);
+    if (this.listenerRegistered) {
+      try {
+        backgroundTaskManager.off('continuousTaskCancel', this.cancelCallback);
+      } catch (_error) {
+        // Ability destruction also releases this process's listeners.
+      }
+      this.listenerRegistered = false;
     }
-    this.listenerRegistered = false;
+    if (this.suspendListenerRegistered) {
+      try {
+        backgroundTaskManager.off('continuousTaskSuspend', this.suspendCallback);
+      } catch (_error) {
+        // Best-effort teardown.
+      }
+      this.suspendListenerRegistered = false;
+    }
+    if (this.context !== undefined) {
+      this.reconcile(this.context);
+    }
   }
 
   onBackground(context: common.UIAbilityContext): void {
-    this.isBackground = true;
-    const generation: number = ++this.lifecycleGeneration;
-    this.clearRetryTimer();
-    this.startWhenVpnActive(context, generation, 0);
+    this.record('background_entered');
+    this.reconcile(context);
   }
 
   onForeground(context: common.UIAbilityContext): void {
-    this.isBackground = false;
-    this.lifecycleGeneration++;
-    this.clearRetryTimer();
-    this.stopHealthCheck();
-    this.stop(context);
+    // Foreground permits retrying a system failure, not undoing user dismissal.
+    this.nextStartAtMs = 0;
+    this.retryCount = 0;
+    this.reconcile(context);
   }
 
-  private startWhenVpnActive(context: common.UIAbilityContext,
-    generation: number, attempt: number): void {
-    if (!this.isBackground || generation !== this.lifecycleGeneration ||
-      this.isStarted || this.startInFlight || this.stopInFlight) {
+  private async reconcile(context: common.UIAbilityContext): Promise<void> {
+    if (this.operationInFlight) {
       return;
     }
-    if (this.hasLiveVpnStatus(context.filesDir)) {
-      this.start(context, generation);
-      return;
+    this.operationInFlight = true;
+    const generation: number = this.lifecycleGeneration;
+    try {
+      if (!this.monitoring) {
+        await this.stop(context);
+        return;
+      }
+      const status: VpnRuntimeStatus = this.readStatus(context.filesDir);
+      if (status.state === 'disconnected') {
+        this.suppressedUntilDisconnect = false;
+        this.nextStartAtMs = 0;
+        this.retryCount = 0;
+        this.lastLiveAtMs = 0;
+        await this.stop(context);
+        return;
+      }
+      if (status.state !== 'connected') {
+        // Missing telemetry is uncertain. Retain an acquired task briefly,
+        // but never acquire a new task based on stale connection evidence.
+        if (this.task !== undefined && Date.now() - this.lastLiveAtMs > VPN_STATUS_GRACE_MS) {
+          this.record('background_status_timeout');
+          await this.stop(context);
+        }
+        return;
+      }
+      this.lastLiveAtMs = Date.now();
+      if (this.task === undefined && !this.suppressedUntilDisconnect && Date.now() >= this.nextStartAtMs) {
+        await this.start(context, generation);
+      }
+      if (this.monitoring && generation === this.lifecycleGeneration && this.task !== undefined) {
+        await this.updateNotification(context, status);
+      }
+    } catch (error) {
+      this.scheduleRetry();
+      this.record('background_operation_failed', (error as BusinessError).code ?? -1);
+    } finally {
+      // Destruction may happen during any awaited operation.
+      if (!this.monitoring) {
+        await this.stop(context);
+      }
+      this.operationInFlight = false;
     }
-    if (attempt >= START_RETRY_LIMIT) {
-      hilog.info(DOMAIN, TAG,
-        'VPN background task not started because no live VPN session was detected');
-      return;
-    }
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = -1;
-      this.startWhenVpnActive(context, generation, attempt + 1);
-    }, START_RETRY_INTERVAL_MS);
   }
 
   private async start(context: common.UIAbilityContext, generation: number): Promise<void> {
-    this.startInFlight = true;
-    try {
-      const info: wantAgent.WantAgentInfo = {
-        wants: [{
-          bundleName: BUNDLE_NAME,
-          abilityName: ENTRY_ABILITY_NAME
-        }],
-        actionType: wantAgent.OperationType.START_ABILITY,
-        requestCode: 1001,
-        actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
-      };
-      const agent: WantAgent = await wantAgent.getWantAgent(info);
-      if (!this.isBackground || generation !== this.lifecycleGeneration) {
-        return;
-      }
-      await backgroundTaskManager.startBackgroundRunning(
-        context, backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
-      if (!this.isBackground || generation !== this.lifecycleGeneration) {
-        await backgroundTaskManager.stopBackgroundRunning(context);
-        return;
-      }
-      this.isStarted = true;
-      this.startHealthCheck(context, generation);
-      hilog.info(DOMAIN, TAG, 'VPN DATA_TRANSFER background task started');
-    } catch (error) {
-      const businessError = error as BusinessError;
-      hilog.error(DOMAIN, TAG,
-        'Failed to start VPN background task. code=%{public}d %{public}s',
-        businessError.code ?? -1, DiagnosticPrivacy.formatLogError(businessError));
-    } finally {
-      this.startInFlight = false;
+    const revision: number = this.cancellationRevision;
+    const info: wantAgent.WantAgentInfo = {
+      wants: [{ bundleName: BUNDLE_NAME, abilityName: ENTRY_ABILITY_NAME }],
+      actionType: wantAgent.OperationType.START_ABILITY,
+      requestCode: 1001,
+      actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+    };
+    const agent: WantAgent = await wantAgent.getWantAgent(info);
+    if (!this.monitoring || generation !== this.lifecycleGeneration ||
+      revision !== this.cancellationRevision || this.readStatus(context.filesDir).state !== 'connected') {
+      return;
     }
+    // The numeric overload returns void and cannot supply the system-owned
+    // notification ID needed for DATA_TRANSFER live-view updates.
+    const task: backgroundTaskManager.ContinuousTaskNotification =
+      await backgroundTaskManager.startBackgroundRunning(context, ['dataTransfer'], agent);
+    if (revision !== this.cancellationRevision) {
+      return;
+    }
+    this.task = task;
+    if (!this.monitoring || generation !== this.lifecycleGeneration ||
+      this.readStatus(context.filesDir).state === 'disconnected') {
+      await this.stop(context);
+      return;
+    }
+    this.nextNotificationAtMs = 0;
+    this.record('background_started');
+    hilog.info(DOMAIN, TAG, 'VPN DATA_TRANSFER background task started. id=%{public}d',
+      task.continuousTaskId ?? -1);
   }
 
   private async stop(context: common.UIAbilityContext): Promise<void> {
-    if (this.stopInFlight) {
+    if (this.task === undefined) {
       return;
     }
-    this.stopInFlight = true;
+    this.stopping = true;
     try {
-      const tasks: backgroundTaskManager.ContinuousTaskInfo[] =
-        await backgroundTaskManager.getAllContinuousTasks(context, false);
-      const hasEntryTask: boolean =
-        tasks.some((task: backgroundTaskManager.ContinuousTaskInfo) =>
-          task.abilityName === ENTRY_ABILITY_NAME);
-      if (!this.isStarted && !hasEntryTask) {
-        return;
-      }
       await backgroundTaskManager.stopBackgroundRunning(context);
-      this.isStarted = false;
-      hilog.info(DOMAIN, TAG, 'VPN DATA_TRANSFER background task stopped');
+      this.task = undefined;
+      this.record('background_stopped');
     } catch (error) {
-      const businessError = error as BusinessError;
-      hilog.warn(DOMAIN, TAG,
-        'Failed to stop VPN background task. code=%{public}d %{public}s',
-        businessError.code ?? -1, DiagnosticPrivacy.formatLogError(businessError));
+      this.record('background_stop_failed', (error as BusinessError).code ?? -1);
     } finally {
-      this.stopInFlight = false;
-      if (this.isBackground) {
-        this.startWhenVpnActive(context, this.lifecycleGeneration, 0);
-      }
+      this.stopping = false;
     }
   }
 
-  private startHealthCheck(context: common.UIAbilityContext, generation: number): void {
-    this.stopHealthCheck();
-    this.healthTimer = setInterval(() => {
-      if (!this.isBackground || generation !== this.lifecycleGeneration ||
-        !this.isStarted) {
-        this.stopHealthCheck();
-        return;
+  private async updateNotification(context: common.UIAbilityContext, status: VpnRuntimeStatus): Promise<void> {
+    const task: backgroundTaskManager.ContinuousTaskNotification | undefined = this.task;
+    if (task === undefined || Date.now() < this.nextNotificationAtMs) {
+      return;
+    }
+    this.nextNotificationAtMs = Date.now() + NOTIFICATION_UPDATE_INTERVAL_MS;
+    const title: string = context.resourceManager.getStringByNameSync('notification_vpn_background_title');
+    const traffic: string = `↑ ${this.formatBytes(status.txBytes)}  ↓ ${this.formatBytes(status.rxBytes)}`;
+    const request: notificationManager.NotificationRequest = {
+      id: task.notificationId,
+      notificationSlotType: notificationManager.SlotType.LIVE_VIEW,
+      isAlertOnce: true,
+      content: {
+        notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_SYSTEM_LIVE_VIEW,
+        systemLiveView: { typeCode: 8, title: title, text: traffic }
+      },
+      template: {
+        name: 'downloadTemplate',
+        // A tunnel has no completion percentage. Never invent cyclic progress
+        // or traffic: leave progress at zero and display actual byte counters.
+        data: { title: title, fileName: traffic, progressValue: 0 }
       }
-      if (!this.hasLiveVpnStatus(context.filesDir)) {
-        this.stopHealthCheck();
-        this.stop(context);
-      }
-    }, HEALTH_CHECK_INTERVAL_MS);
+    };
+    try {
+      await notificationManager.publish(request);
+    } catch (error) {
+      this.record('background_notification_failed', (error as BusinessError).code ?? -1);
+    }
   }
 
-  private hasLiveVpnStatus(filesDir: string): boolean {
+  private readStatus(filesDir: string): VpnRuntimeStatus {
+    const result: VpnRuntimeStatus = { state: 'unknown', txBytes: 0, rxBytes: 0 };
     try {
       const status: string = fileIo.readTextSync(StoragePaths.vpnStatusPath(filesDir));
-      const heartbeatMatch: RegExpMatchArray | null = status.match(/heartbeatMs=(\d+)/);
-      if (heartbeatMatch === null) {
-        return false;
-      }
-      const heartbeatMs: number = Number(heartbeatMatch[1]);
+      const heartbeatMs: number = this.statusNumber(status, 'heartbeatMs');
       const ageMs: number = Date.now() - heartbeatMs;
       if (heartbeatMs <= 0 || ageMs < 0 || ageMs > VPN_STATUS_FRESH_MS) {
-        return false;
+        return result;
       }
       const normalized: string = status.toLowerCase();
-      if (normalized.includes('destroyed') || normalized.includes('stopped') ||
-        normalized.includes('failed')) {
-        return false;
+      if (normalized.includes('extension destroyed') || normalized.includes('vpn disconnected') ||
+        normalized.includes('state=stopped') || normalized.startsWith('stopped') ||
+        (normalized.startsWith('failed') && !normalized.includes('status unavailable'))) {
+        result.state = 'disconnected';
+      } else if (normalized.includes('state=running') && normalized.includes('tun=true')) {
+        result.state = 'connected';
+        result.txBytes = this.statusNumber(status, 'txBytes');
+        result.rxBytes = this.statusNumber(status, 'rxBytes');
       }
-      return normalized.includes('state=running') ||
-        normalized.includes('tun=true') ||
-        normalized.includes('lifecycle entered') ||
-        normalized.includes('connection object created') ||
-        normalized.includes('creation pending') ||
-        normalized.includes('interface established') ||
-        normalized.includes('backend starting');
     } catch (_error) {
-      return false;
+      // Atomic file replacement or temporary I/O failure is uncertain state.
     }
+    return result;
   }
 
-  private clearRetryTimer(): void {
-    if (this.retryTimer >= 0) {
-      clearTimeout(this.retryTimer);
-      this.retryTimer = -1;
-    }
+  private statusNumber(status: string, field: string): number {
+    const match: RegExpMatchArray | null = status.match(new RegExp(`(?:^|\\s)${field}=(\\d+)(?:\\s|$)`));
+    const value: number = match === null ? 0 : Number(match[1]);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
   }
 
-  private stopHealthCheck(): void {
-    if (this.healthTimer >= 0) {
-      clearInterval(this.healthTimer);
-      this.healthTimer = -1;
+  private formatBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+    }
+    if (bytes >= 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+    }
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+
+  private scheduleRetry(): void {
+    this.nextStartAtMs = Date.now() + Math.min(START_RETRY_MAX_MS,
+      START_RETRY_BASE_MS * Math.pow(2, Math.min(this.retryCount, 4)));
+    this.retryCount++;
+  }
+
+  private record(event: string, code: number = 0): void {
+    hilog.info(DOMAIN, TAG, '%{public}s code=%{public}d', event, code);
+    if (this.context !== undefined) {
+      DiagnosticEventStore.record(this.context.filesDir, 'ui', event, 'background', code);
     }
   }
 }

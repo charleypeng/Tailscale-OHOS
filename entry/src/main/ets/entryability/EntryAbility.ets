@@ -56,7 +56,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    this.vpnBackgroundTask.register();
+    this.vpnBackgroundTask.register(this.context);
     this.handleTaildropNotificationWant(want);
     hilog.info(DOMAIN, TAG, 'EntryAbility onCreate. ability=%{public}s reason=%{public}d',
       want.abilityName ?? '', launchParam.launchReason);

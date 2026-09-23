@@ -3,10 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -22,17 +31,23 @@ import (
 )
 
 const (
-	meshArcDeviceEndpoint            = "http://127.0.0.1:53317/api/mesharc/devices"
-	meshArcDeviceSyncPeriod          = 10 * time.Second
-	meshArcDeviceTimeout             = 3 * time.Second
-	meshArcLocalSendPort             = 53317
-	meshArcLocalSendProtocol         = "https"
-	meshArcLocalSendVersion          = "2.1"
-	meshArcLocalSendRegisterPath     = "/api/localsend/v2/register"
-	meshArcLocalSendProbeTimeout     = 1200 * time.Millisecond
-	meshArcLocalSendProbeWorkers     = 8
-	meshArcLocalSendProbeFingerprint = "mesharc-ohos"
-	meshArcLocalSendDeviceType       = "mobile"
+	meshArcDeviceEndpointHTTPS   = "https://127.0.0.1:53317/api/mesharc/devices"
+	meshArcDeviceEndpointHTTP    = "http://127.0.0.1:53317/api/mesharc/devices"
+	meshArcDeviceSyncPeriod      = 30 * time.Second
+	meshArcDeviceTimeout         = 3 * time.Second
+	meshArcLocalSendPort         = 53317
+	meshArcLocalSendProtocol     = "https"
+	meshArcLocalSendVersion      = "2.1"
+	meshArcLocalSendRegisterPath = "/api/localsend/v2/register"
+	// LocalSend is probed through the Tailscale path. A DERP relay plus the
+	// TLS/mTLS handshake can exceed 1.2s even when the receiver is healthy.
+	// LocalSend receivers answer /register immediately on the Tailscale path.
+	// Keep HTTPS and the legacy HTTP fallback bounded so an explicit refresh can
+	// take its optional second stability sample without occupying the UI for ten
+	// seconds.
+	meshArcLocalSendProbeTimeout = 1500 * time.Millisecond
+	meshArcLocalSendProbeWorkers = 8
+	meshArcLocalSendDeviceType   = "mobile"
 )
 
 // meshArcDeviceItem is the array item defined by the MeshArc device API
@@ -83,14 +98,145 @@ type meshArcDeviceProbeResult struct {
 	Status meshArcDeviceStatus
 }
 
-var meshArcDeviceHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy:             nil,
-		DisableKeepAlives: true,
-	},
-	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
+// meshArcReceiverStatus is intentionally limited to protocol-level counters
+// and fixed failure categories. It is persisted with the peer snapshot for
+// support diagnostics without retaining peer addresses, fingerprints, or
+// certificate material.
+type meshArcReceiverStatus struct {
+	State       string `json:"state"`
+	Protocol    string `json:"protocol,omitempty"`
+	HTTPStatus  int    `json:"httpStatus,omitempty"`
+	Sent        int    `json:"sent"`
+	Registered  int    `json:"registered"`
+	HTTPSReason string `json:"httpsReason,omitempty"`
+	HTTPReason  string `json:"httpReason,omitempty"`
+	CheckedAtMS int64  `json:"checkedAtMs,omitempty"`
+}
+
+type meshArcDevicePostResult struct {
+	Protocol   string
+	HTTPStatus int
+	Registered int
+}
+
+type meshArcDevicePostResponse struct {
+	OK         bool `json:"ok"`
+	Registered int  `json:"registered"`
+}
+
+type meshArcDevicePostError struct {
+	reason string
+}
+
+func (e *meshArcDevicePostError) Error() string {
+	return e.reason
+}
+
+type meshArcProbeClient struct {
+	HTTPClient  *http.Client
+	Fingerprint string
+}
+
+var meshArcDeviceHTTPClient = newMeshArcDeviceHTTPClient(nil)
+
+var (
+	meshArcDeviceHTTPSClientOnce  sync.Once
+	meshArcDeviceHTTPSClientValue *http.Client
+	meshArcDeviceHTTPSClientErr   error
+)
+
+func newMeshArcDeviceHTTPClient(tlsConfig *tls.Config) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:             nil,
+			DisableKeepAlives: true,
+			TLSClientConfig:   tlsConfig,
+		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// meshArcDeviceHTTPSClient keeps the receiver's client identity in memory for
+// this MeshArc process. The current 捷传 build serves the MeshArc endpoint on
+// its LocalSend TLS listener and requires a client certificate, although the
+// published API contract still documents plain HTTP on loopback.
+func meshArcDeviceHTTPSClient() (*http.Client, error) {
+	meshArcDeviceHTTPSClientOnce.Do(func() {
+		certificate, err := newMeshArcDeviceClientCertificate()
+		if err != nil {
+			meshArcDeviceHTTPSClientErr = err
+			return
+		}
+		meshArcDeviceHTTPSClientValue = newMeshArcDeviceHTTPClient(&tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, // #nosec G402 -- 捷传 uses a self-signed LocalSend certificate.
+			Certificates:       []tls.Certificate{certificate},
+			// The receiver advertises an acceptable CA name for its client
+			// certificate request. This ephemeral MeshArc certificate is
+			// intentionally self-signed, so default selection may decline to
+			// send it and the receiver reports "certificate required".
+			GetClientCertificate: func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+				return &certificate, nil
+			},
+		})
+	})
+	return meshArcDeviceHTTPSClientValue, meshArcDeviceHTTPSClientErr
+}
+
+func newMeshArcDeviceClientCertificate() (tls.Certificate, error) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{CommonName: "MeshArc"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+	derCertificate, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derCertificate})
+	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyDER})
+	return tls.X509KeyPair(certificatePEM, privateKeyPEM)
+}
+
+func meshArcDeviceClientTLSConfig(certificate tls.Certificate) *tls.Config {
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // #nosec G402 -- LocalSend uses per-device self-signed certificates.
+		Certificates:       []tls.Certificate{certificate},
+		// Always select the ephemeral certificate when the peer requests one.
+		// Its self-signed issuer may not appear in the advertised CA list.
+		GetClientCertificate: func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return &certificate, nil
+		},
+	}
+}
+
+func meshArcCertificateFingerprint(certificate tls.Certificate) string {
+	if len(certificate.Certificate) == 0 {
+		return ""
+	}
+	digest := sha256.Sum256(certificate.Certificate[0])
+	return fmt.Sprintf("%X", digest)
 }
 
 func (b *backendController) startMeshArcDeviceSync(
@@ -105,6 +251,10 @@ func (b *backendController) startMeshArcDeviceSync(
 	}
 	previousCancel := b.meshArcDeviceSyncStop
 	b.meshArcDeviceSyncStop = cancel
+	// The first probe is asynchronous. Treat the status channel as initialized
+	// immediately so an empty result cannot keep an online peer in checking
+	// forever if the first LocalSend request fails.
+	b.meshArcDeviceSyncReady = true
 	b.mu.Unlock()
 	if previousCancel != nil {
 		previousCancel()
@@ -140,6 +290,8 @@ func (b *backendController) meshArcDeviceSyncLoop(
 func (b *backendController) syncMeshArcDevicesOnce(
 	ctx context.Context, server *tsnet.Server, generation uint64, client *local.Client,
 ) {
+	b.meshArcDeviceRefreshMu.Lock()
+	defer b.meshArcDeviceRefreshMu.Unlock()
 	if !b.isCurrentBackend(server, generation) {
 		return
 	}
@@ -150,6 +302,12 @@ func (b *backendController) syncMeshArcDevicesOnce(
 		// Keep the last successful list alive. The receiver expires devices that
 		// stop arriving, while a transient status failure should not immediately
 		// hide every device from the user's transfer list.
+		if err != nil {
+			b.updateMeshArcReceiverStatus(server, generation, meshArcReceiverStatus{
+				State: "failed", Sent: 0, Registered: 0,
+				HTTPSReason: "tailscale_status", CheckedAtMS: time.Now().UnixMilli(),
+			})
+		}
 		return
 	}
 
@@ -159,9 +317,33 @@ func (b *backendController) syncMeshArcDevicesOnce(
 	if !b.updateMeshArcDeviceStatuses(server, generation, localSendStatuses) {
 		return
 	}
-	postContext, postCancel := context.WithTimeout(ctx, meshArcDeviceTimeout)
-	_ = postMeshArcDevices(postContext, meshArcDeviceEndpoint, devices)
-	postCancel()
+	receiverStatus := postMeshArcDevicesToReceiver(ctx, devices)
+	b.updateMeshArcReceiverStatus(server, generation, receiverStatus)
+}
+
+func (b *backendController) refreshMeshArcDevices() string {
+	b.mu.Lock()
+	server := b.server
+	generation := b.generation
+	client := b.client
+	b.mu.Unlock()
+	if server == nil || client == nil {
+		return "FAILED | LocalSend refresh | backend not ready"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	b.syncMeshArcDevicesOnce(ctx, server, generation, client)
+	// A receiver that was available may occasionally lose one mTLS/register
+	// request while the service is still running. The first miss is held by
+	// updateMeshArcDeviceStatuses; an explicit user refresh immediately takes a
+	// second sample so a stopped receiver still becomes unavailable in one tap.
+	if b.hasPendingMeshArcDeviceFailure(server, generation) && ctx.Err() == nil {
+		b.syncMeshArcDevicesOnce(ctx, server, generation, client)
+	}
+	if !b.isCurrentBackend(server, generation) {
+		return "FAILED | LocalSend refresh | backend changed"
+	}
+	return "OK | LocalSend refresh"
 }
 
 func (b *backendController) isCurrentBackend(server *tsnet.Server, generation uint64) bool {
@@ -178,7 +360,67 @@ func (b *backendController) updateMeshArcDeviceStatuses(
 	if b.server != server || b.generation != generation || b.client == nil {
 		return false
 	}
-	b.meshArcDeviceStatuses = cloneMeshArcDeviceStatuses(statuses)
+	if b.meshArcDeviceFailures == nil {
+		b.meshArcDeviceFailures = make(map[string]int)
+	}
+	merged := cloneMeshArcDeviceStatuses(statuses)
+	for peerKey, status := range statuses {
+		if status.State == "available" {
+			delete(b.meshArcDeviceFailures, peerKey)
+			continue
+		}
+		previous, hadPrevious := b.meshArcDeviceStatuses[peerKey]
+		if hadPrevious && previous.State != "available" && previous.State != "checking" {
+			delete(b.meshArcDeviceFailures, peerKey)
+			continue
+		}
+		failures := b.meshArcDeviceFailures[peerKey] + 1
+		b.meshArcDeviceFailures[peerKey] = failures
+		if failures < 2 {
+			if hadPrevious {
+				merged[peerKey] = previous
+			} else {
+				merged[peerKey] = meshArcDeviceStatus{
+					State:       "checking",
+					CheckedAtMS: status.CheckedAtMS,
+				}
+			}
+		}
+	}
+	for peerKey := range b.meshArcDeviceFailures {
+		if _, stillOnline := statuses[peerKey]; !stillOnline {
+			delete(b.meshArcDeviceFailures, peerKey)
+		}
+	}
+	b.meshArcDeviceStatuses = merged
+	return true
+}
+
+func (b *backendController) hasPendingMeshArcDeviceFailure(
+	server *tsnet.Server, generation uint64,
+) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server != server || b.generation != generation || b.client == nil {
+		return false
+	}
+	for _, failures := range b.meshArcDeviceFailures {
+		if failures == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *backendController) updateMeshArcReceiverStatus(
+	server *tsnet.Server, generation uint64, status meshArcReceiverStatus,
+) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.server != server || b.generation != generation || b.client == nil {
+		return false
+	}
+	b.meshArcReceiverStatus = status
 	return true
 }
 
@@ -200,31 +442,125 @@ func cloneMeshArcDeviceStatuses(
 	return copyStatuses
 }
 
-func postMeshArcDevices(ctx context.Context, endpoint string, devices []meshArcDeviceItem) error {
+func postMeshArcDevices(
+	ctx context.Context, endpoint string, devices []meshArcDeviceItem,
+) (meshArcDevicePostResult, error) {
+	result := meshArcDevicePostResult{Protocol: "http"}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+		result.Protocol = "https"
+	}
 	if devices == nil {
 		devices = []meshArcDeviceItem{}
 	}
 	body, err := json.Marshal(devices)
 	if err != nil {
-		return err
+		return result, &meshArcDevicePostError{reason: "encoding"}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return result, &meshArcDevicePostError{reason: "request"}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "MeshArc-Tailscale/1")
-	response, err := meshArcDeviceHTTPClient.Do(request)
+	client := meshArcDeviceHTTPClient
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+		client, err = meshArcDeviceHTTPSClient()
+		if err != nil {
+			return result, &meshArcDevicePostError{reason: "client_certificate"}
+		}
+	}
+	response, err := client.Do(request)
 	if err != nil {
-		return err
+		return result, &meshArcDevicePostError{reason: meshArcTransportFailureReason(ctx, err)}
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("MeshArc device endpoint returned HTTP %d", response.StatusCode)
+	result.HTTPStatus = response.StatusCode
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+	if readErr != nil {
+		return result, &meshArcDevicePostError{reason: "response_read"}
 	}
-	return nil
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return result, &meshArcDevicePostError{reason: "http_status"}
+	}
+	var decoded meshArcDevicePostResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return result, &meshArcDevicePostError{reason: "invalid_response"}
+	}
+	result.Registered = decoded.Registered
+	if !decoded.OK {
+		return result, &meshArcDevicePostError{reason: "rejected"}
+	}
+	return result, nil
+}
+
+func postMeshArcDevicesToReceiver(ctx context.Context, devices []meshArcDeviceItem) meshArcReceiverStatus {
+	status := meshArcReceiverStatus{
+		State: "failed", Sent: len(devices), Registered: 0, CheckedAtMS: time.Now().UnixMilli(),
+	}
+	for _, endpoint := range []string{meshArcDeviceEndpointHTTPS, meshArcDeviceEndpointHTTP} {
+		attemptContext, cancel := context.WithTimeout(ctx, meshArcDeviceTimeout)
+		result, err := postMeshArcDevices(attemptContext, endpoint, devices)
+		cancel()
+		if err == nil {
+			status.Protocol = result.Protocol
+			status.HTTPStatus = result.HTTPStatus
+			status.Registered = result.Registered
+			if result.Registered == len(devices) {
+				status.State = "ok"
+			} else if result.Protocol == "https" {
+				status.HTTPSReason = "registration_mismatch"
+			} else {
+				status.HTTPReason = "registration_mismatch"
+			}
+			return status
+		}
+		status.Protocol = result.Protocol
+		status.HTTPStatus = result.HTTPStatus
+		reason := meshArcPostFailureReason(err)
+		if result.Protocol == "https" {
+			status.HTTPSReason = reason
+		} else {
+			status.HTTPReason = reason
+		}
+	}
+	return status
+}
+
+func meshArcPostFailureReason(err error) string {
+	var postError *meshArcDevicePostError
+	if errors.As(err, &postError) {
+		return postError.reason
+	}
+	return "unknown"
+}
+
+func meshArcTransportFailureReason(ctx context.Context, err error) string {
+	if ctx.Err() != nil {
+		return "timeout"
+	}
+	detail := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(detail, "certificate required"):
+		return "tls_certificate_required"
+	case strings.Contains(detail, "remote error: tls"),
+		strings.Contains(detail, "tls handshake"),
+		strings.Contains(detail, "tls:"):
+		return "tls_handshake"
+	case strings.Contains(detail, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(detail, "connection reset"):
+		return "connection_reset"
+	case strings.Contains(detail, "no route to host"),
+		strings.Contains(detail, "network is unreachable"):
+		return "network_unreachable"
+	case strings.Contains(detail, "malformed http response"):
+		return "malformed_http"
+	case strings.Contains(detail, "eof"):
+		return "eof"
+	default:
+		return "transport"
+	}
 }
 
 func probeMeshArcDeviceItems(
@@ -253,7 +589,7 @@ func probeMeshArcDeviceItems(
 	if probeClient == nil {
 		return items, statuses
 	}
-	defer closeMeshArcProbeHTTPClient(probeClient)
+	defer closeMeshArcProbeHTTPClient(probeClient.HTTPClient)
 
 	workerCount := meshArcLocalSendProbeWorkers
 	if len(candidates) < workerCount {
@@ -272,9 +608,8 @@ func probeMeshArcDeviceItems(
 		go func() {
 			defer workers.Done()
 			for candidate := range jobs {
-				probeContext, cancel := context.WithTimeout(ctx, meshArcLocalSendProbeTimeout)
-				info, protocol, ok := probeMeshArcLocalSend(probeContext, probeClient, candidate.address)
-				cancel()
+				info, protocol, ok := probeMeshArcLocalSend(
+					ctx, probeClient.HTTPClient, candidate.address, probeClient.Fingerprint)
 				if !ok {
 					continue
 				}
@@ -294,7 +629,12 @@ func probeMeshArcDeviceItems(
 	}
 	workers.Wait()
 	close(results)
+	seenKeys := make(map[string]struct{}, len(candidates))
 	for result := range results {
+		if _, ok := seenKeys[result.Key]; ok {
+			continue
+		}
+		seenKeys[result.Key] = struct{}{}
 		items = append(items, result.Item)
 		statuses[result.Key] = result.Status
 	}
@@ -311,33 +651,39 @@ func collectMeshArcPeerCandidates(status *ipnstate.Status) []meshArcPeerCandidat
 		if peer == nil || !peer.Online || peer.Expired {
 			continue
 		}
-		address := meshArcPeerAddress(peer.TailscaleIPs)
-		if address == "" {
-			continue
+		for _, address := range meshArcPeerAddresses(peer.TailscaleIPs) {
+			candidates = append(candidates, meshArcPeerCandidate{peer: peer, address: address})
 		}
-		candidates = append(candidates, meshArcPeerCandidate{peer: peer, address: address})
 	}
 	return candidates
 }
 
-func newMeshArcProbeHTTPClient(server *tsnet.Server) *http.Client {
+func newMeshArcProbeHTTPClient(server *tsnet.Server) *meshArcProbeClient {
 	if server == nil {
+		return nil
+	}
+	certificate, err := newMeshArcDeviceClientCertificate()
+	if err != nil {
+		return nil
+	}
+	fingerprint := meshArcCertificateFingerprint(certificate)
+	if fingerprint == "" {
 		return nil
 	}
 	transport := &http.Transport{
 		Proxy:             nil,
 		DialContext:       server.Dial,
 		DisableKeepAlives: true,
-		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true, // #nosec G402 -- LocalSend uses per-device self-signed certificates.
-		},
+		TLSClientConfig:   meshArcDeviceClientTLSConfig(certificate),
 	}
-	return &http.Client{
-		Transport: transport,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
+	return &meshArcProbeClient{
+		HTTPClient: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
+		Fingerprint: fingerprint,
 	}
 }
 
@@ -351,29 +697,32 @@ func closeMeshArcProbeHTTPClient(client *http.Client) {
 }
 
 func probeMeshArcLocalSend(
-	ctx context.Context, httpClient *http.Client, address string,
+	ctx context.Context, httpClient *http.Client, address, fingerprint string,
 ) (meshArcLocalSendInfo, string, bool) {
-	if httpClient == nil || strings.TrimSpace(address) == "" {
+	if httpClient == nil || strings.TrimSpace(address) == "" || strings.TrimSpace(fingerprint) == "" {
 		return meshArcLocalSendInfo{}, "", false
 	}
 	for _, protocol := range []string{meshArcLocalSendProtocol, "http"} {
+		attemptContext, cancel := context.WithTimeout(ctx, meshArcLocalSendProbeTimeout)
 		probeRequest := meshArcLocalSendInfo{
 			Alias:       "MeshArc",
 			Version:     meshArcLocalSendVersion,
 			DeviceModel: "MeshArc",
 			DeviceType:  meshArcLocalSendDeviceType,
-			Fingerprint: meshArcLocalSendProbeFingerprint,
+			Fingerprint: fingerprint,
 			Port:        meshArcLocalSendPort,
 			Protocol:    protocol,
 			Download:    false,
 		}
 		body, err := json.Marshal(probeRequest)
 		if err != nil {
+			cancel()
 			return meshArcLocalSendInfo{}, "", false
 		}
 		endpoint := protocol + "://" + net.JoinHostPort(address, strconv.Itoa(meshArcLocalSendPort)) + meshArcLocalSendRegisterPath
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		request, err := http.NewRequestWithContext(attemptContext, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
+			cancel()
 			continue
 		}
 		request.Header.Set("Content-Type", "application/json")
@@ -381,10 +730,12 @@ func probeMeshArcLocalSend(
 		request.Header.Set("User-Agent", "MeshArc-LocalSendProbe/1")
 		response, err := httpClient.Do(request)
 		if err != nil {
+			cancel()
 			continue
 		}
 		responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 		response.Body.Close()
+		cancel()
 		if readErr != nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 			continue
 		}
@@ -476,17 +827,42 @@ func sortMeshArcDeviceItems(items []meshArcDeviceItem) {
 }
 
 func meshArcPeerAddress(addresses []netip.Addr) string {
+	values := meshArcPeerAddresses(addresses)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func meshArcPeerAddresses(addresses []netip.Addr) []string {
+	result := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
 	for _, address := range addresses {
-		if address.IsValid() && address.Is4() {
-			return address.String()
+		if !address.IsValid() || !address.Is4() {
+			continue
 		}
+		value := address.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	if len(result) > 0 {
+		return result
 	}
 	for _, address := range addresses {
-		if address.IsValid() {
-			return address.String()
+		if !address.IsValid() {
+			continue
 		}
+		value := address.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
-	return ""
+	return result
 }
 
 func meshArcDeviceType(osName, deviceModel string) string {
