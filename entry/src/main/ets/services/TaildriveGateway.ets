@@ -5,9 +5,13 @@ const TAILDRIVE_QUERY_REQUEST_FILE: string = 'taildrive-query-request.json';
 const TAILDRIVE_QUERY_RESPONSE_FILE: string = 'taildrive-query-response.json';
 const TAILDRIVE_TRANSFER_REQUEST_FILE: string = 'taildrive-transfer-request.json';
 const TAILDRIVE_TRANSFER_RESPONSE_FILE: string = 'taildrive-transfer-response.json';
+const TAILDRIVE_MANUAL_TRANSFER_REQUEST_FILE: string = 'taildrive-manual-transfer-request.json';
+const TAILDRIVE_MANUAL_TRANSFER_RESPONSE_FILE: string = 'taildrive-manual-transfer-response.json';
 const TAILDRIVE_CONTROL_REQUEST_FILE: string = 'taildrive-control-request.json';
 const TAILDRIVE_CONTROL_RESPONSE_FILE: string = 'taildrive-control-response.json';
-const TAILDRIVE_QUERY_TIMEOUT_MS: number = 25000;
+// A cold remote directory query first performs a bounded native TSMP warm-up
+// (up to 5 s), then retains the existing 20 s WebDAV request limit.
+const TAILDRIVE_QUERY_TIMEOUT_MS: number = 32000;
 const TAILDRIVE_MUTATION_TIMEOUT_MS: number = 35000;
 const TAILDRIVE_TRANSFER_TIMEOUT_MS: number = 30 * 60 * 1000 + 10000;
 const TAILDRIVE_CONTROL_TIMEOUT_MS: number = 5000;
@@ -98,6 +102,7 @@ export class TaildriveGateway {
   private nextRequestId: number = Date.now();
   private queryQueue: Promise<void> = Promise.resolve();
   private transferQueue: Promise<void> = Promise.resolve();
+  private manualTransferQueue: Promise<void> = Promise.resolve();
   private controlQueue: Promise<void> = Promise.resolve();
 
   configure(context: common.UIAbilityContext): void {
@@ -122,8 +127,9 @@ export class TaildriveGateway {
     return this.parseMutation(text);
   }
 
-  async download(request: TaildriveTransferRequest): Promise<TaildriveTransferSnapshot> {
-    const text: string = await this.requestThroughVpnExtension('transfer', 'download',
+  async download(request: TaildriveTransferRequest, manual: boolean = false): Promise<TaildriveTransferSnapshot> {
+    const channel: string = manual ? 'manualTransfer' : 'transfer';
+    const text: string = await this.requestThroughVpnExtension(channel, 'download',
       JSON.stringify(request), TAILDRIVE_TRANSFER_TIMEOUT_MS);
     return this.parseTransfer(text);
   }
@@ -158,6 +164,9 @@ export class TaildriveGateway {
     if (channel === 'transfer') {
       previous = this.transferQueue;
       this.transferQueue = next;
+    } else if (channel === 'manualTransfer') {
+      previous = this.manualTransferQueue;
+      this.manualTransferQueue = next;
     } else if (channel === 'control') {
       previous = this.controlQueue;
       this.controlQueue = next;
@@ -215,6 +224,9 @@ export class TaildriveGateway {
     if (channel === 'transfer') {
       return TAILDRIVE_TRANSFER_REQUEST_FILE;
     }
+    if (channel === 'manualTransfer') {
+      return TAILDRIVE_MANUAL_TRANSFER_REQUEST_FILE;
+    }
     if (channel === 'control') {
       return TAILDRIVE_CONTROL_REQUEST_FILE;
     }
@@ -224,6 +236,9 @@ export class TaildriveGateway {
   private responseFile(channel: string): string {
     if (channel === 'transfer') {
       return TAILDRIVE_TRANSFER_RESPONSE_FILE;
+    }
+    if (channel === 'manualTransfer') {
+      return TAILDRIVE_MANUAL_TRANSFER_RESPONSE_FILE;
     }
     if (channel === 'control') {
       return TAILDRIVE_CONTROL_RESPONSE_FILE;

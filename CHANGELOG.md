@@ -1,4 +1,19 @@
-# MeshArc 0.9.10 更新日志
+# MeshArc changelog
+
+## 1.1.0 (100000003) · September 23, 2026
+
+Tailscale OHOS is now MeshArc. The repository retains the name Tailscale-OHOS.
+
+- Added continuous background VPN support and a notification with actual session traffic totals.
+- Improved recovery after temporary status failures and system cancellation, while respecting user dismissal.
+- Improved connection updates and fixed false disconnect reports from optional service checks.
+- Fixed long device-list scrolling, device-detail gestures and release-note panel actions.
+- Refined navigation icons, labels and gradient overlays.
+- Fixed vendor SDK metadata detection in the build scripts.
+
+Read the [full release notes](docs/releases/1.1.0.md) for feature highlights, compatibility, contributors and validation details.
+
+## 0.9.10 更新记录
 
 - 0.9.10: Peer OS versions now fall back to control-plane Node Hostinfo when the local Status projection is incomplete.
 本次更新覆盖从基线版本 0.8.41 到 0.9.9 的全部用户可见变化，以下内容按重要程度排列。

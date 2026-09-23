@@ -30,7 +30,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -40,32 +39,39 @@ import (
 )
 
 type backendController struct {
-	mu                    sync.Mutex
-	loginMu               sync.Mutex
-	taildropMu            sync.Mutex
-	taildriveMu           sync.Mutex
-	server                *tsnet.Server
-	client                *local.Client
-	starting              bool
-	startErr              string
-	phase                 string
-	externalTun           bool
-	tunDevice             *harmonyTunDevice
-	stateDir              string
-	subnetRoutes          int
-	generation            uint64
-	cancelStart           context.CancelFunc
-	taildropStop          context.CancelFunc
-	taildropTask          taildropTransferSnapshot
-	taildropWatchStop     context.CancelFunc
-	taildropIncoming      []taildropIncomingFile
-	taildriveStop         context.CancelFunc
-	taildriveTask         taildriveTransferSnapshot
-	meshArcDeviceSyncStop context.CancelFunc
-	meshArcDeviceStatuses map[string]meshArcDeviceStatus
-	osVersion             string
-	loginStarted          bool
-	loginGeneration       uint64
+	mu                     sync.Mutex
+	loginMu                sync.Mutex
+	taildropMu             sync.Mutex
+	taildriveMu            sync.Mutex
+	taildriveWarmMu        sync.Mutex
+	taildriveWarmAt        map[string]time.Time
+	taildriveDAVReadyAt    map[string]time.Time
+	server                 *tsnet.Server
+	client                 *local.Client
+	starting               bool
+	startErr               string
+	phase                  string
+	externalTun            bool
+	tunDevice              *harmonyTunDevice
+	stateDir               string
+	subnetRoutes           int
+	generation             uint64
+	cancelStart            context.CancelFunc
+	taildropStop           context.CancelFunc
+	taildropTask           taildropTransferSnapshot
+	taildropWatchStop      context.CancelFunc
+	taildropIncoming       []taildropIncomingFile
+	taildriveStop          context.CancelFunc
+	taildriveTask          taildriveTransferSnapshot
+	meshArcDeviceSyncStop  context.CancelFunc
+	meshArcDeviceRefreshMu sync.Mutex
+	meshArcDeviceStatuses  map[string]meshArcDeviceStatus
+	meshArcDeviceFailures  map[string]int
+	meshArcDeviceSyncReady bool
+	meshArcReceiverStatus  meshArcReceiverStatus
+	osVersion              string
+	loginStarted           bool
+	loginGeneration        uint64
 }
 
 var harmonyBackend backendController
@@ -185,13 +191,14 @@ type networkPreferences struct {
 }
 
 type backendSnapshot struct {
-	Status          string             `json:"status"`
-	ExitNodes       []exitNodeChoice   `json:"exitNodes"`
-	Peers           []peerSummary      `json:"peers"`
-	NetworkSettings networkPreferences `json:"networkSettings"`
-	Account         accountSummary     `json:"account"`
-	Taildrop        taildropSnapshot   `json:"taildrop"`
-	Taildrive       taildriveSnapshot  `json:"taildrive"`
+	Status          string                `json:"status"`
+	ExitNodes       []exitNodeChoice      `json:"exitNodes"`
+	Peers           []peerSummary         `json:"peers"`
+	NetworkSettings networkPreferences    `json:"networkSettings"`
+	Account         accountSummary        `json:"account"`
+	Taildrop        taildropSnapshot      `json:"taildrop"`
+	Taildrive       taildriveSnapshot     `json:"taildrive"`
+	MeshArcReceiver meshArcReceiverStatus `json:"meshArcReceiver"`
 }
 
 type taildropTargetSummary struct {
@@ -285,33 +292,6 @@ const (
 	taildropMaxSendFiles    = 100
 )
 
-// magicsockDebugWindow is how long magicsock's verbose discovery logging stays
-// on after a probe or a physical-network change. Verbose discovery covers every
-// peer, so it is bounded rather than always-on.
-const magicsockDebugWindow = 90 * time.Second
-
-// tailscaleListenPort pins the UDP port that carries WireGuard and disco
-// traffic to the IANA-assigned WireGuard port, which is also what every
-// official Tailscale client uses. Leaving the port to the engine means
-// magicsock binds an arbitrary free port on every start, and that has three
-// concrete costs on a hard-NAT (carrier) network:
-//
-//  1. Every restart and every rebind produces a different 5-tuple, so the
-//     carrier NAT allocates a fresh external mapping each time and no peer can
-//     keep a stable address for us.
-//  2. magicsock only offers the "<public IP>:<local port>" candidate to peers
-//     when it knows its own fixed port, because that candidate trades on the
-//     user having mapped the same port through the router (see
-//     magicsock.Conn.determineEndpoints). With a random port there is nothing
-//     worth announcing.
-//  3. Our own phone is reachable from the cellular network at the same
-//     <public IPv6>:41641 in the working comparison case, so a stable port
-//     restores the rendezvous point that a peer on the home network can use.
-//
-// magicsock still falls back to an ephemeral port when this one is busy, so
-// pinning it cannot make the engine fail to start.
-const tailscaleListenPort = 41641
-
 type taildropProgressReader struct {
 	reader io.Reader
 	onRead func(int)
@@ -329,6 +309,10 @@ func (b *backendController) start(stateDir, deviceModel, osVersion, controlURL s
 	b.mu.Lock()
 	b.osVersion = strings.TrimSpace(osVersion)
 	b.mu.Unlock()
+	b.taildriveWarmMu.Lock()
+	b.taildriveWarmAt = nil
+	b.taildriveDAVReadyAt = nil
+	b.taildriveWarmMu.Unlock()
 	return b.startWithDevice(stateDir, deviceModel, controlURL, nil)
 }
 
@@ -353,6 +337,9 @@ func (b *backendController) stop() string {
 	b.taildropWatchStop = nil
 	b.meshArcDeviceSyncStop = nil
 	b.meshArcDeviceStatuses = nil
+	b.meshArcDeviceFailures = nil
+	b.meshArcDeviceSyncReady = false
+	b.meshArcReceiverStatus = meshArcReceiverStatus{State: "idle"}
 	b.taildropIncoming = nil
 	b.mu.Unlock()
 	if cancelStart != nil {
@@ -430,11 +417,11 @@ func (b *backendController) startWithDevice(stateDir, deviceModel, controlURL st
 	generation := b.generation
 	startContext, cancelStart := context.WithCancel(context.Background())
 	server := &tsnet.Server{
+		Port:                   41641,
 		Dir:                    profileStateDir,
 		Hostname:               harmonyHostname(trimmedModel),
 		ControlURL:             normalizedControlURL,
 		Ephemeral:              false,
-		Port:                   tailscaleListenPort,
 		UserLogf:               b.userLogf,
 		Logf:                   b.backendLogf,
 		UseNetstackForPeerDial: device != nil,
@@ -454,6 +441,7 @@ func (b *backendController) startWithDevice(stateDir, deviceModel, controlURL st
 	b.tunDevice = device
 	b.stateDir = profileStateDir
 	b.cancelStart = cancelStart
+	b.meshArcReceiverStatus = meshArcReceiverStatus{State: "idle"}
 	b.mu.Unlock()
 
 	go b.startAsync(server, profileStateDir, generation, startContext)
@@ -490,6 +478,9 @@ func (b *backendController) restartWithTun(
 	b.taildropWatchStop = nil
 	b.meshArcDeviceSyncStop = nil
 	b.meshArcDeviceStatuses = nil
+	b.meshArcDeviceFailures = nil
+	b.meshArcDeviceSyncReady = false
+	b.meshArcReceiverStatus = meshArcReceiverStatus{State: "idle"}
 	b.taildropIncoming = nil
 	b.mu.Unlock()
 	if cancelStart != nil {
@@ -660,6 +651,7 @@ func (b *backendController) peers() string {
 	b.mu.Lock()
 	client := b.client
 	localSendStatuses := b.meshArcDeviceStatusesSnapshotLocked()
+	localSendStatusReady := b.meshArcDeviceSyncReady
 	b.mu.Unlock()
 	if client == nil {
 		return "[]"
@@ -670,7 +662,7 @@ func (b *backendController) peers() string {
 	if err != nil || status.BackendState != "Running" {
 		return "[]"
 	}
-	peers := buildPeerSummariesWithLocalSend(ctx, client, status, localSendStatuses)
+	peers := buildPeerSummariesWithLocalSend(ctx, client, status, localSendStatuses, localSendStatusReady)
 	sort.Slice(peers, func(i, j int) bool {
 		if peers[i].Online != peers[j].Online {
 			return peers[i].Online
@@ -772,6 +764,8 @@ func (b *backendController) snapshot() string {
 	serverPresent := b.server != nil
 	stateDir := b.stateDir
 	localSendStatuses := b.meshArcDeviceStatusesSnapshotLocked()
+	localSendStatusReady := b.meshArcDeviceSyncReady
+	meshArcReceiver := b.meshArcReceiverStatus
 	b.mu.Unlock()
 
 	settings, err := readNetworkPreferences(stateDir)
@@ -788,7 +782,8 @@ func (b *backendController) snapshot() string {
 			IncomingFiles: b.taildropIncomingSnapshot(),
 			WaitingFiles:  []taildropWaitingFileSummary{}, Transfer: b.taildropTransferSnapshot(),
 		},
-		Taildrive: taildriveSnapshot{State: "loading", Transfer: b.taildriveTransferSnapshot()},
+		Taildrive:       taildriveSnapshot{State: "loading", Transfer: b.taildriveTransferSnapshot()},
+		MeshArcReceiver: meshArcReceiver,
 	}
 	switch {
 	case startErr != "":
@@ -822,7 +817,8 @@ func (b *backendController) snapshot() string {
 
 	snapshot.ExitNodes = buildExitNodeChoices(status, stateDir)
 	metadataCtx, metadataCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	snapshot.Peers = buildPeerSummariesWithLocalSend(metadataCtx, client, status, localSendStatuses)
+	snapshot.Peers = buildPeerSummariesWithLocalSend(metadataCtx, client, status, localSendStatuses,
+		localSendStatusReady)
 	metadataCancel()
 	snapshot.Taildrop = buildTaildropSnapshot(client, b.taildropTransferSnapshot(), b.taildropIncomingSnapshot())
 	snapshot.Taildrive = taildriveSnapshot{State: "ready", Transfer: b.taildriveTransferSnapshot()}
@@ -1581,12 +1577,12 @@ func buildPeerSummaries(status *ipnstate.Status) []peerSummary {
 func buildPeerSummariesWithClient(
 	ctx context.Context, client *local.Client, status *ipnstate.Status,
 ) []peerSummary {
-	return buildPeerSummariesWithLocalSend(ctx, client, status, nil)
+	return buildPeerSummariesWithLocalSend(ctx, client, status, nil, false)
 }
 
 func buildPeerSummariesWithLocalSend(
 	ctx context.Context, client *local.Client, status *ipnstate.Status,
-	localSendStatuses map[string]meshArcDeviceStatus,
+	localSendStatuses map[string]meshArcDeviceStatus, localSendStatusReady bool,
 ) []peerSummary {
 	peers := make([]peerSummary, 0, len(status.Peer))
 	for peerKey, peer := range status.Peer {
@@ -1606,6 +1602,9 @@ func buildPeerSummariesWithLocalSend(
 			localSend = localSendStatuses[key]
 			if localSend.State == "" {
 				localSend.State = "checking"
+				if localSendStatusReady {
+					localSend.State = "unavailable"
+				}
 			}
 		} else {
 			localSend.State = "offline"
@@ -2001,7 +2000,22 @@ func (b *backendController) peerProbe() string {
 	return "SKIPPED | peer TSMP probe | no IPv4 peer"
 }
 
-// peerConnectivity performs three TSMP probes against a UI-selected peer. The
+func (b *backendController) networkChanged(interfaceName string) string {
+	b.mu.Lock()
+	server, ready := b.server, !b.starting && b.externalTun
+	b.mu.Unlock()
+	if server == nil || !ready {
+		return "FAILED | network change | backend unavailable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.NotifyNetworkChange(ctx, interfaceName); err != nil {
+		return "FAILED | network change | refresh unavailable"
+	}
+	return "OK | network change | refreshed"
+}
+
+// peerConnectivity performs bounded path discovery against a UI-selected peer. The
 // UI passes only the stable hashed peer key and the result contains aggregate
 // reachability metrics, never the peer address, name, endpoint, or key.
 func (b *backendController) peerConnectivity(peerKey string) string {
@@ -2012,9 +2026,11 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 	if client == nil {
 		return marshalPeerConnectivity(result)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	status, err := client.Status(ctx)
-	cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	statusCtx, statusCancel := context.WithTimeout(ctx, 2*time.Second)
+	status, err := client.Status(statusCtx)
+	statusCancel()
 	if err != nil {
 		result.Reason = "status_unavailable"
 		return marshalPeerConnectivity(result)
@@ -2057,16 +2073,15 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 	// PingDisco is Tailscale's path-discovery primitive. Unlike TSMP it reports
 	// direct endpoints, peer relays, and DERP regions without guessing from RTT.
 	const attempts = 6
-	probeDeadline := time.Now().Add(10 * time.Second)
 	latencies := make([]int, 0, attempts)
 	pathType := "unknown"
 	relayRegion := ""
 	for attempt := 0; attempt < attempts; attempt++ {
-		if time.Now().After(probeDeadline) {
+		if ctx.Err() != nil {
 			break
 		}
 		result.Sent++
-		pingCtx, pingCancel := context.WithDeadline(context.Background(), probeDeadline)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 		pingResult, pingErr := client.Ping(pingCtx, target, tailcfg.PingDisco)
 		pingCancel()
 		if pingErr == nil && pingResult != nil && pingResult.Err == "" {
@@ -2075,6 +2090,8 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 			if pingResult.Endpoint != "" {
 				pathType = "direct"
 				relayRegion = ""
+				// A DERP response often arrives before UDP hole punching completes.
+				// Stop only once a direct endpoint has actually answered.
 				break
 			} else if pathType != "direct" && pingResult.PeerRelay != "" {
 				pathType = "peerRelay"
@@ -2084,8 +2101,11 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 				relayRegion = pingResult.DERPRegionCode
 			}
 		}
-		if attempt+1 < attempts && time.Now().Before(probeDeadline) {
-			time.Sleep(time.Second)
+		if attempt+1 < attempts {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
 		}
 	}
 	result.Received = len(latencies)
@@ -2098,7 +2118,7 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 	}
 	result.State = "reachable"
 	result.Reason = ""
-	if result.Received < attempts {
+	if result.Received < result.Sent {
 		result.State = "degraded"
 	}
 	result.MinLatencyMS = latencies[0]
@@ -2110,7 +2130,9 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 		totalLatencyMS += latencyMS
 	}
 	result.AvgLatencyMS = totalLatencyMS / result.Received
-	result.LatencyMS = result.AvgLatencyMS
+	// Label the selected path with its most recent response, rather than
+	// averaging an initial DERP hop into the eventual direct-path latency.
+	result.LatencyMS = latencies[len(latencies)-1]
 	result.PathType = pathType
 	result.RelayRegion = relayRegion
 	return marshalPeerConnectivity(result)
@@ -2252,7 +2274,7 @@ func (b *backendController) mediaServiceProbe(peerKey string) string {
 		result.ErrorMessage = "backend_unavailable"
 		return marshalMediaProbe(result)
 	}
-	statusCtx, statusCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	statusCtx, statusCancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
 	status, err := client.Status(statusCtx)
 	statusCancel()
 	if err != nil {
@@ -2283,7 +2305,7 @@ func (b *backendController) mediaServiceProbe(peerKey string) string {
 		return marshalMediaProbe(result)
 	}
 
-	probeCtx, probeCancel := context.WithTimeout(context.Background(), 3500*time.Millisecond)
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 	defer probeCancel()
 	type mediaProbeTarget struct {
 		baseURL string
@@ -2697,72 +2719,6 @@ func (b *backendController) status() string {
 	return b.formatRunningStatus(status, prefs, prefsErr)
 }
 
-// setDefaultRouteInterface records the interface that currently carries the
-// default route, as resolved by the HarmonyOS network manager.
-//
-// The engine cannot work this out on its own. Inside the VPN application
-// sandbox /proc/net/route is reduced to the process's own routes (no default
-// entry) and AF_NETLINK route dumps are denied, so netmon's DefaultRouteInterface
-// stays empty. magicsock reads that field during Rebind to decide whether the
-// DERP connections the previous network owned should be torn down, so an empty
-// value leaves relay paths pointing at a network that no longer exists.
-//
-// The VPN extension already resolves the physical network -- it filters out
-// VPN and non-INTERNET networks and reads ConnectionProperties for the very
-// same snapshot -- so it reports the interface name here. Recording the hint is
-// enough: the caller follows up with a network-change notification, which makes
-// netmon recompute its cached state and pick the name up.
-func (b *backendController) setDefaultRouteInterface(ifName string) string {
-	trimmed := strings.TrimSpace(ifName)
-	netmon.UpdateLastKnownDefaultRouteInterface(trimmed)
-	if trimmed == "" {
-		return "OK | default route | cleared"
-	}
-	return fmt.Sprintf("OK | default route | interface=%s", trimmed)
-}
-
-// networkChanged forces magicsock to move its UDP sockets to the current
-// physical network and immediately refresh its STUN endpoints. OpenHarmony is
-// built with Linux tags, but its application sandbox does not reliably deliver
-// the netlink events that upstream netmon expects when Wi-Fi and cellular
-// networks switch.
-//
-// It goes through tsnet's own network-change notification instead of a bare
-// rebind, because that path makes netmon resample the host interfaces first.
-// The resample is what makes the interface name published by
-// setDefaultRouteInterface visible to the cached netmon state that magicsock
-// reads while rebinding.
-func (b *backendController) networkChanged() string {
-	b.mu.Lock()
-	server := b.server
-	b.mu.Unlock()
-	if server == nil {
-		return "FAILED | network change | backend unavailable"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	// A physical-network change is when discovery re-runs from scratch, so the
-	// verbose path trace is worth having for a bounded window from here on.
-	server.SetMagicsockDebugLogging(true)
-	time.AfterFunc(magicsockDebugWindow, func() {
-		server.SetMagicsockDebugLogging(false)
-	})
-	explicitRebind, err := server.NotifyNetworkChange(ctx)
-	if err != nil {
-		return "FAILED | network change | state refresh failed | errorStage=netmon"
-	}
-	b.mu.Lock()
-	current := b.server == server
-	b.mu.Unlock()
-	if !current {
-		return "FAILED | network change | stale backend | errorStage=generation"
-	}
-	// The transition itself is the only moment where the local NAT verdict
-	// matters, so publish it together with the rebind result.
-	return fmt.Sprintf("OK | network change | stateRefreshed=true | rebindIssued=%t | %s",
-		explicitRebind, server.NetworkDiagnostics(ctx))
-}
-
 func (b *backendController) formatRunningStatus(
 	status *ipnstate.Status, prefs *ipn.Prefs, prefsErr error,
 ) string {
@@ -2771,7 +2727,12 @@ func (b *backendController) formatRunningStatus(
 	tunDevice := b.tunDevice
 	subnetRoutes := b.subnetRoutes
 	phase := b.phase
+	server := b.server
 	b.mu.Unlock()
+	networkDiagnostics := "netCheck=unavailable"
+	if server != nil {
+		networkDiagnostics = server.NetworkDiagnostics()
+	}
 	exitNodeSelected := prefsErr == nil && prefs != nil &&
 		(!prefs.ExitNodeID.IsZero() || prefs.ExitNodeIP.IsValid())
 	subnetRoutesEnabled := prefsErr == nil && prefs != nil && prefs.RouteAll
@@ -2786,7 +2747,7 @@ func (b *backendController) formatRunningStatus(
 		dnsQueries, dnsResponses, dnsAnswers = tunDevice.dnsCounts()
 	}
 	return fmt.Sprintf(
-		"OK | state=%s | loginURLReady=%t | tailscaleIPs=%d | tun=%t | exitNode=%t | routeAll=%t | exitNodeLAN=%t | subnetRoutes=%d | tunRead=%d | tunWrite=%d | tunReadErrors=%d | tunWriteErrors=%d | trafficSession=%d | txBytes=%d | rxBytes=%d | dnsQ=%d | dnsR=%d | dnsA=%d | netUp=unknown | phase=%s",
+		"OK | state=%s | loginURLReady=%t | tailscaleIPs=%d | tun=%t | exitNode=%t | routeAll=%t | exitNodeLAN=%t | subnetRoutes=%d | tunRead=%d | tunWrite=%d | tunReadErrors=%d | tunWriteErrors=%d | trafficSession=%d | txBytes=%d | rxBytes=%d | dnsQ=%d | dnsR=%d | dnsA=%d | netUp=unknown | %s | phase=%s",
 		status.BackendState,
 		status.AuthURL != "",
 		len(status.TailscaleIPs),
@@ -2805,6 +2766,7 @@ func (b *backendController) formatRunningStatus(
 		dnsQueries,
 		dnsResponses,
 		dnsAnswers,
+		networkDiagnostics,
 		phase,
 	)
 }

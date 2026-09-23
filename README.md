@@ -1,178 +1,54 @@
-# Tailscale for HarmonyOS NEXT
+# MeshArc
 
-This repository is a working native HarmonyOS NEXT port of the Tailscale
-userspace client. It is currently an engineering MVP, not a release-ready
-consumer application.
+<img src="AppScope/resources/base/media/app_icon.png" width="96" alt="MeshArc app icon">
 
-## Current milestone
+A native Tailscale community client for HarmonyOS NEXT.
 
-The project now provides a signed ArkTS application with this native stack:
+[![Latest release](https://img.shields.io/github/v/release/flypigJ/Tailscale-OHOS?label=Release&logo=github)](https://github.com/flypigJ/Tailscale-OHOS/releases/latest)
+[![AppGallery](https://img.shields.io/badge/AppGallery-Download-2563eb)](https://appgallery.huawei.com/app/detail?id=io.github.tailscaleohos)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 
-```text
-ArkTS UI / VpnExtensionAbility
-  -> C++ Node-API bridge
-  -> OpenHarmony arm64 Go c-shared library
-  -> Tailscale v1.102.4 userspace engine
-  -> HarmonyOS vpn-tun file descriptor
-```
+Connect your HarmonyOS device to your tailnet. Reach your computers and NAS, move files between devices, and open your remote media library.
 
-Verified on a HarmonyOS 6.1 phone:
+## Features
 
-- persistent browser login and restart without re-authentication;
-- strict control-plane TLS, system roots, DNS, and TCP access;
-- HarmonyOS VPN authorization and virtual-interface creation;
-- an external `tun.Device` adapter feeding wireguard-go;
-- backend state `Running` with `tun=true`;
-- bidirectional system-browser packets through the TUN;
-- an identity-redacted TSMP probe to an online tailnet peer;
-- connect, disconnect, backend recovery, and reconnect without logging in again.
-- stale VPN-state detection and persistent-backend recovery after a device reboot;
-- VPN survival across screen-off and Wi-Fi loss/reassociation, with a live heartbeat;
-- control-plane-approved subnet routes passed into the HarmonyOS VPN config,
-  with `RouteAll` explicitly enabled to match Tailscale's mobile/Windows
-  `--accept-routes` behavior on the OpenHarmony Go runtime;
-- full behind-router subnet delivery through a temporary approved `/32`,
-  verified by the injected-route count, HarmonyOS TUN deltas, anonymous
-  Windows router peer deltas, and successful browser traffic; the temporary
-  route and Windows forwarding changes were removed after the test;
-- exit-node discovery and selection before connecting, with a safe empty state
-  when the tailnet offers no eligible exit node;
-- real public-IP traffic through an approved Windows exit node, verified from
-  both the HarmonyOS TUN counters and anonymous Windows peer byte counters;
-- exit-node choice restored across UI-to-Extension handoff and repeated signed
-  HAP replacement installs without requiring the user to select it again.
+1. **Private networking:** connect to Tailscale, inspect device status and latency, and access services by Tailscale IP.
+2. **Exit nodes and subnet routes:** use an available exit node, accept approved routes, and control local network access.
+3. **File sharing:** send and receive files with Taildrop through MeshSend; browse, upload and download authorized Taildrive shares.
+4. **Media integration:** discover Jellyfin, Emby and Plex servers and open them in HosPlayer.
+5. **Local privacy:** protect app access and Taildrive folders with system authentication.
+6. **Native experience:** adaptive ArkUI layouts, light and dark themes, and English and Chinese app interfaces.
 
-MagicDNS support is currently disabled. The HarmonyOS VPN configuration does
-not publish Tailscale DNS servers or search domains, and peer actions expose
-Tailscale IP addresses only.
+## Compatibility
 
-TODO(LiveView): add the opt-in Tailscale traffic LiveView only after the
-application has received the official HarmonyOS LiveView entitlement and an
-approved `event` scenario. The VPN Extension should own the start/update/stop
-lifecycle, serialize updates at no more than 1 Hz, use the standalone Tailscale
-nine-dot mark, and expose only current-session upload/download byte totals.
-Until the entitlement is available, do not show a non-functional LiveView
-switch in Settings.
+The source project targets **HarmonyOS 6.1 / API 23** and **arm64**, with layouts for phones, tablets and 2in1 devices. Check AppGallery for the requirements of the store version. Device testing has primarily used a physical phone.
 
-The bilingual Chinese/English UI uses the SDK 23 HDS floating bottom navigation
-with immersive system material. Home owns connection state, the single
-`Connect` / `Disconnect` action, exit-node selection, the read-only peer view,
-Settings owns persistent disconnected-state controls for subnet-route acceptance,
-LAN access while using an exit node, the four-level
-immersive-glow preference, and account management. Connected-state
-network controls become read-only so changing VPN routes never produces a
-partially updated live tunnel. A confirmation-guarded logout action is
-available only while disconnected. Lower-level probes remain behind a
-collapsed engineering-diagnostics control on the Settings page.
-The destructive logout action is intentionally not exercised by automated
-real-device regression checks.
+The Tailscale engine is currently pinned to **1.86.5** with the OpenHarmony Go 1.24 toolchain.
 
-This project intentionally does not request or implement application
-auto-start. After a device reboot, the app rejects the previous session's stale
-heartbeat and restores the authenticated backend safely when opened; the user
-then reconnects the system VPN from the app.
+- MagicDNS is not enabled; use Tailscale IP addresses.
+- Reconnect manually after restarting your device.
+- Disconnect other system VPNs before connecting.
 
-The device service center also contains an on-demand Jellyfin, Emby, and Plex
-probe plus a disabled-by-default HosPlayer handoff prototype. See
-[`docs/hosplayer-integration-prototype.md`](docs/hosplayer-integration-prototype.md)
-for the parameter contract, privacy rules, and server-free engineering test.
+## Usage
 
-## Important port details
+- [Get MeshArc on AppGallery](https://appgallery.huawei.com/app/detail?id=io.github.tailscaleohos)
+- [Download HAP builds and read release notes](https://github.com/flypigJ/Tailscale-OHOS/releases/latest)
+- [Installation and first connection](docs/getting-started.md)
+- [Build on Windows](docs/development.md) · [Build on macOS](docs/build-macos.md)
 
-- The OpenHarmony Go port uses Linux build tags, but application processes
-  cannot use tailscaled's Linux socket-mark/netns bypass. The bridge disables
-  that path with `netns.SetEnabled(false)`.
-- `tsnet.Server` has a small local patch allowing an externally owned
-  `tun.Device`; netstack does not consume peer or subnet traffic in that mode.
-- HarmonyOS owns interface and route creation. The route interface name must be
-  the platform-defined `vpn-tun`, as documented by the
-  [OpenHarmony VPN Extension guide](https://gitee.com/openharmony/docs/blob/08986484ea997e1da01ac9221d20dbb0a54b4922/en/application-dev/network/net-vpnExtension.md).
-- The VPN Extension restores the persistent backend inside its own process,
-  then restarts the engine with the HarmonyOS TUN descriptor.
-- Status and test results deliberately omit auth URLs, node identities,
-  tailnet addresses, keys, and signing information.
-- The control-plane machine name is derived from HarmonyOS `marketName` (with
-  `productModel` as fallback), and build metadata reports Tailscale `1.102.4`
-  with `Linux HongMeng Kernel Build 1.12.0` as the OS build line.
+## Contributing
 
-## Build and real-device checks
+Bug reports, documentation, device testing and focused pull requests are welcome. Read the [contributing guide](CONTRIBUTING.md) and search [existing issues](https://github.com/flypigJ/Tailscale-OHOS/issues) before opening a report.
 
-The application baseline is HarmonyOS 6.1 / SDK 23 for both compatible and
-target SDK versions. Run from PowerShell with one USB phone connected:
+## License
 
-```powershell
-scripts\build.ps1
-scripts\device-engine-probe.ps1
-scripts\device-backend-probe.ps1
-```
+MeshArc is licensed under the [BSD 3-Clause License](LICENSE). Third-party components retain their original licenses and copyright notices; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
-After `Connect Tailscale` reports a running tunnel, validate real application
-traffic and the optional online-peer probe:
+## Credits
 
-```powershell
-scripts\device-vpn-data-probe.ps1
-scripts\device-exit-node-probe.ps1
-scripts\device-user-ui-probe.ps1 -SkipInstall
-```
+- [Tailscale](https://github.com/tailscale/tailscale) for the networking engine.
+- [OpenHarmony Go](https://gitcode.com/openharmony-sig/ohos_golang_go) for the Go toolchain port.
+- [LocalSend](https://github.com/localsend/localsend) for the local file-sharing protocol and implementation reference.
+- Everyone testing MeshArc, reporting issues and contributing improvements.
 
-The UI probe rejects a locked device explicitly, visits Home and Settings,
-checks the home Exit Node section, all three glow choices and the engineering
-menu, validates that the three connection controls remain on Home and are
-editable only while disconnected, and never activates the logout action.
-
-The scripts discover DevEco Studio from `DEVECO_STUDIO_HOME`, `DEVECO_HOME`, or
-its standard Windows install location. The OpenHarmony SIG Go source tree and
-bootstrap tools are generated local dependencies and are excluded from Git.
-The real `build-profile.json5` is also local-only so signing paths and material
-cannot be committed accidentally; `build-profile.example.json5` documents the
-non-sensitive project shape. Configure local HarmonyOS signing before running
-the signed-HAP and HDC workflow.
-
-On macOS, the same HarmonyOS project can be built with the downloaded Command
-Line Tools. `scripts/build-macos.sh` discovers the SDK, Hvigor, Node.js, JDK,
-OpenHarmony Go toolchain, and local `@tailscale/common` module, then builds and
-verifies an arm64 unsigned HAP:
-
-```bash
-scripts/build-macos.sh
-```
-
-The default Command Line Tools location is
-`/Volumes/Doc/Library/Huawei/command-line-tools`; override it with
-`HUAWEI_COMMAND_LINE_TOOLS_HOME` or set `DEVECO_SDK_HOME` explicitly. This is a
-HarmonyOS HAP built on a Mac, not a macOS `.app`. Add local signing configuration
-to the ignored `build-profile.json5` before installing it on a device.
-
-The Tailscale userspace engine is updated to the latest upstream release
-`v1.102.4`. Its module requires Go `1.26.6`, so this repository uses the
-OpenHarmony SIG `release-branch.go1.26` source plus the tracked
-`patches/ohos-go-openharmony.patch` port.
-
-To update the Tailscale userspace engine, fetch a new upstream tag, temporarily
-reverse the current HarmonyOS patch, check out the new tag, apply and rebase the
-patch, then update the `tailscale.com` version in
-`native/go_bridge/go.mod`. Regenerate the tracked patch after resolving any
-conflicts:
-
-```bash
-git -C third_party/tailscale fetch --tags origin
-git -C third_party/tailscale apply --reverse ../../patches/tailscale-ohos.patch
-git -C third_party/tailscale switch --detach vX.Y.Z
-git -C third_party/tailscale apply ../../patches/tailscale-ohos.patch
-git -C third_party/tailscale diff --binary > patches/tailscale-ohos.patch
-```
-
-Before building a release that raises Tailscale's Go requirement, use a
-matching OpenHarmony Go branch, apply `patches/ohos-go-openharmony.patch`, and
-regenerate that patch from the clean branch. The Go bridge build embeds the
-version from `native/go_bridge/go.mod`. The HarmonyOS patches are platform
-code, not upstream release artifacts, so every version update must be
-compiled and tested again.
-
-## Roadmap to a distributable client
-
-1. Extend lifecycle and network-transition soak tests from minutes to hours.
-2. Review state-file protection, privacy disclosures, logging, resource use,
-   signing, and AppGallery policy requirements.
-3. Rebase the minimal Tailscale changes onto an upstreamable platform layer and
-   add CI for Go, C++, ArkTS, packaging, and physical-device regression tests.
+MeshArc is an independent community project and is not affiliated with or endorsed by Tailscale Inc. The app is named MeshArc; this repository retains the name `Tailscale-OHOS`.

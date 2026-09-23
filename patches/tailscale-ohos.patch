@@ -1,5 +1,5 @@
 diff --git a/client/tailscale/apitype/apitype.go b/client/tailscale/apitype/apitype.go
-index 1229376..5593413 100644
+index 58cdcec..c3cd8bb 100644
 --- a/client/tailscale/apitype/apitype.go
 +++ b/client/tailscale/apitype/apitype.go
 @@ -52,8 +52,9 @@ type FileTarget struct {
@@ -10,44 +10,211 @@ index 1229376..5593413 100644
 -	Size int64
 +	Name         string
 +	Size         int64
-+	ReceivedAtMs int64
++	ReceivedAtMs int64 `json:"receivedAtMs,omitempty"`
  }
  
  // SetPushDeviceTokenRequest is the body POSTed to the LocalAPI endpoint /set-device-token.
-diff --git a/feature/taildrop/retrieve.go b/feature/taildrop/retrieve.go
-index dd1b75b..b418c38 100644
---- a/feature/taildrop/retrieve.go
-+++ b/feature/taildrop/retrieve.go
-@@ -87,8 +87,9 @@ func (m *manager) WaitingFiles() ([]apitype.WaitingFile, error) {
+diff --git a/feature/taildrop/localapi.go b/feature/taildrop/localapi.go
+index 8a3904f..8054012 100644
+--- a/feature/taildrop/localapi.go
++++ b/feature/taildrop/localapi.go
+@@ -17,6 +17,7 @@
+ 	"net/url"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 
+ 	"tailscale.com/client/tailscale/apitype"
+@@ -127,27 +128,8 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
+-	// Periodically report progress of outgoing files.
+-	outgoingFiles := make(map[string]*ipn.OutgoingFile)
+-	t := time.NewTicker(1 * time.Second)
+-	progressUpdates := make(chan ipn.OutgoingFile)
+-	defer close(progressUpdates)
+-
+-	go func() {
+-		defer t.Stop()
+-		defer ext.updateOutgoingFiles(outgoingFiles)
+-		for {
+-			select {
+-			case u, ok := <-progressUpdates:
+-				if !ok {
+-					return
+-				}
+-				outgoingFiles[u.ID] = &u
+-			case <-t.C:
+-				ext.updateOutgoingFiles(outgoingFiles)
+-			}
+-		}
+-	}()
++	progress := newOutgoingProgress(ext)
++	defer progress.notify()
+ 
+ 	switch r.Method {
+ 	case "PUT":
+@@ -157,16 +139,61 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
+ 			Name:         filenameEscaped,
+ 			DeclaredSize: r.ContentLength,
+ 		}
+-		singleFilePut(h, r.Context(), progressUpdates, w, r.Body, dstURL, file)
++		singleFilePut(h, r.Context(), progress, w, r.Body, dstURL, file)
+ 	case "POST":
+-		multiFilePost(h, progressUpdates, w, r, peerID, dstURL)
++		multiFilePost(h, progress, w, r, peerID, dstURL)
+ 	default:
+ 		http.Error(w, "want PUT to put file", http.StatusBadRequest)
+ 		return
+ 	}
+ }
+ 
+-func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile), w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
++// outgoingProgress coalesces hot-path progress notifications without ever
++// blocking request-body reads on a notification consumer.
++type outgoingProgress struct {
++	ext            *Extension
++	notifyInterval time.Duration
++	mu             sync.Mutex
++	pending        map[string]*ipn.OutgoingFile
++	last           time.Time
++}
++
++func newOutgoingProgress(ext *Extension) *outgoingProgress {
++	return &outgoingProgress{ext: ext, notifyInterval: time.Second}
++}
++
++func (p *outgoingProgress) update(file ipn.OutgoingFile) {
++	var updates map[string]*ipn.OutgoingFile
++	p.mu.Lock()
++	if p.pending == nil {
++		p.pending = make(map[string]*ipn.OutgoingFile)
++	}
++	copy := file
++	p.pending[file.ID] = &copy
++	if time.Since(p.last) >= p.notifyInterval {
++		updates, p.pending = p.pending, nil
++		p.last = time.Now()
++	}
++	p.mu.Unlock()
++	if updates != nil {
++		p.ext.updateOutgoingFiles(updates)
++	}
++}
++
++func (p *outgoingProgress) notify() {
++	var updates map[string]*ipn.OutgoingFile
++	p.mu.Lock()
++	if len(p.pending) > 0 {
++		updates, p.pending = p.pending, nil
++		p.last = time.Now()
++	}
++	p.mu.Unlock()
++	if updates != nil {
++		p.ext.updateOutgoingFiles(updates)
++	}
++}
++
++func multiFilePost(h *localapi.Handler, progress *outgoingProgress, w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
+ 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+ 	if err != nil {
+ 		http.Error(w, fmt.Sprintf("invalid Content-Type for multipart POST: %s", err), http.StatusBadRequest)
+@@ -209,13 +236,13 @@ func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile),
+ 
+ 			for _, file := range manifest {
+ 				outgoingFilesByName[file.Name] = file
+-				progressUpdates <- file
++				progress.update(file)
+ 			}
+ 
  			continue
  		}
+ 
+-		if !singleFilePut(h, r.Context(), progressUpdates, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
++		if !singleFilePut(h, r.Context(), progress, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
+ 			return
+ 		}
+ 
+@@ -271,22 +298,25 @@ func (ww *multiFilePostResponseWriter) Flush(w http.ResponseWriter) error {
+ func singleFilePut(
+ 	h *localapi.Handler,
+ 	ctx context.Context,
+-	progressUpdates chan (ipn.OutgoingFile),
++	progress *outgoingProgress,
+ 	w http.ResponseWriter,
+ 	body io.Reader,
+ 	dstURL *url.URL,
+ 	outgoingFile ipn.OutgoingFile,
+ ) bool {
+ 	outgoingFile.Started = time.Now()
++	progress.update(outgoingFile)
++	progress.notify()
+ 	body = progresstracking.NewReader(body, 1*time.Second, func(n int, err error) {
+ 		outgoingFile.Sent = int64(n)
+-		progressUpdates <- outgoingFile
++		progress.update(outgoingFile)
+ 	})
+ 
+ 	fail := func() {
+ 		outgoingFile.Finished = true
+ 		outgoingFile.Succeeded = false
+-		progressUpdates <- outgoingFile
++		progress.update(outgoingFile)
++		progress.notify()
+ 	}
+ 
+ 	// Before we PUT a file we check to see if there are any existing partial file and if so,
+@@ -351,7 +381,8 @@ func singleFilePut(
+ 
+ 	outgoingFile.Finished = true
+ 	outgoingFile.Succeeded = true
+-	progressUpdates <- outgoingFile
++	progress.update(outgoingFile)
++	progress.notify()
+ 
+ 	return true
+ }
+diff --git a/feature/taildrop/retrieve.go b/feature/taildrop/retrieve.go
+index b048a1b..3c65510 100644
+--- a/feature/taildrop/retrieve.go
++++ b/feature/taildrop/retrieve.go
+@@ -86,9 +86,14 @@ func (m *manager) WaitingFiles() ([]apitype.WaitingFile, error) {
+ 		if err != nil {
+ 			continue
+ 		}
++		receivedAtMs := int64(0)
++		if !fi.ModTime().IsZero() {
++			receivedAtMs = fi.ModTime().UnixMilli()
++		}
  		ret = append(ret, apitype.WaitingFile{
 -			Name: name,
 -			Size: fi.Size(),
 +			Name:         name,
 +			Size:         fi.Size(),
-+			ReceivedAtMs: fi.ModTime().UnixMilli(),
++			ReceivedAtMs: receivedAtMs,
  		})
  	}
  	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
 diff --git a/ipn/ipnlocal/local.go b/ipn/ipnlocal/local.go
-index 834c4f0..d4401c6 100644
+index 7154b94..579aced 100644
 --- a/ipn/ipnlocal/local.go
 +++ b/ipn/ipnlocal/local.go
-@@ -1597,6 +1597,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
- 			HostName:        hostinfo.Hostname(),
+@@ -1335,6 +1335,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
+ 			HostName:        p.Hostinfo().Hostname(),
  			DNSName:         p.Name(),
- 			OS:              hostinfo.OS(),
-+			DeviceModel:     hostinfo.DeviceModel(),
-+			OSVersion:       hostinfo.OSVersion(),
+ 			OS:              p.Hostinfo().OS(),
++			DeviceModel:     p.Hostinfo().DeviceModel(),
++			OSVersion:       p.Hostinfo().OSVersion(),
  			LastSeen:        p.LastSeen().Get(),
  			Online:          p.Online().Get(),
- 			ShareeNode:      hostinfo.ShareeNode(),
+ 			ShareeNode:      p.Hostinfo().ShareeNode(),
 diff --git a/ipn/ipnstate/ipnstate.go b/ipn/ipnstate/ipnstate.go
-index 3e2c791..3ed0683 100644
+index e7ae2d6..74a9cb3 100644
 --- a/ipn/ipnstate/ipnstate.go
 +++ b/ipn/ipnstate/ipnstate.go
-@@ -238,9 +238,11 @@ type PeerStatus struct {
+@@ -228,9 +228,11 @@ type PeerStatus struct {
  
  	// DNSName is the Peer's FQDN. It ends with a dot.
  	// It has the form "host.<MagicDNSSuffix>."
@@ -62,7 +229,7 @@ index 3e2c791..3ed0683 100644
  
  	// AltSharerUserID is the user who shared this node
  	// if it's different than UserID. Otherwise it's zero.
-@@ -507,6 +509,12 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
+@@ -476,6 +478,12 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
  	if v := st.OS; v != "" {
  		e.OS = st.OS
  	}
@@ -75,12 +242,12 @@ index 3e2c791..3ed0683 100644
  	if v := st.SSH_HostKeys; v != nil {
  		e.SSH_HostKeys = v
  	}
-diff --git a/net/netmon/harmony_os_openharmony.go b/net/netmon/harmony_os_openharmony.go
+diff --git a/net/netmon/hostroute_openharmony.go b/net/netmon/hostroute_openharmony.go
 new file mode 100644
-index 0000000..1e8a850
+index 0000000..8c8b15d
 --- /dev/null
-+++ b/net/netmon/harmony_os_openharmony.go
-@@ -0,0 +1,17 @@
++++ b/net/netmon/hostroute_openharmony.go
+@@ -0,0 +1,38 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -88,22 +255,43 @@ index 0000000..1e8a850
 +
 +package netmon
 +
-+// isHarmonyOS reports whether this binary is built for OpenHarmony.
-+//
-+// It is a compile-time constant rather than a runtime.GOOS comparison on
-+// purpose. The OpenHarmony Go toolchain reports GOOS as "linux" at runtime
-+// (see src/internal/goos/zgoos_openharmony.go in the patched toolchain, which
-+// defines GOOS = `linux` alongside IsOpenharmony = 1), so
-+// `runtime.GOOS == "openharmony"` is always false and every branch guarded by
-+// it is silently dead. The build tag, in contrast, follows the GOOS value the
-+// build was launched with (GOOS=openharmony), so it does match.
++import (
++	"net"
++	"sync/atomic"
++)
++
++// OpenHarmony reports runtime.GOOS=linux; use build tags for this platform.
++// Adapted from PR #11's host default-route hint. The official host API is
++// authoritative even if /proc contains a stale route after a bearer switch.
++var hostDefaultInterface atomic.Pointer[string]
++
 +const isHarmonyOS = true
-diff --git a/net/netmon/harmony_os_other.go b/net/netmon/harmony_os_other.go
++
++func UpdateLastKnownDefaultRouteInterface(name string) {
++	hostDefaultInterface.Store(&name)
++}
++
++func hostDefaultRoute() (DefaultRouteDetails, bool) {
++	name := hostDefaultInterface.Load()
++	if name == nil {
++		return DefaultRouteDetails{}, false
++	}
++	d := DefaultRouteDetails{InterfaceName: *name}
++	if *name != "" {
++		if iface, err := net.InterfaceByName(*name); err == nil {
++			d.InterfaceIndex = iface.Index
++		}
++	}
++	// An empty host hint explicitly means offline, not permission to reuse a
++	// stale kernel default route or guess from an IMS/hotspot interface.
++	return d, true
++}
+diff --git a/net/netmon/hostroute_other.go b/net/netmon/hostroute_other.go
 new file mode 100644
-index 0000000..b630519
+index 0000000..51d1229
 --- /dev/null
-+++ b/net/netmon/harmony_os_other.go
-@@ -0,0 +1,11 @@
++++ b/net/netmon/hostroute_other.go
+@@ -0,0 +1,14 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -111,251 +299,108 @@ index 0000000..b630519
 +
 +package netmon
 +
-+// isHarmonyOS reports whether this binary is built for OpenHarmony. See
-+// harmony_os_openharmony.go for why this is a build-tag-driven constant
-+// instead of a runtime.GOOS comparison.
 +const isHarmonyOS = false
++
++func UpdateLastKnownDefaultRouteInterface(string) {}
++
++func hostDefaultRoute() (DefaultRouteDetails, bool) {
++	return DefaultRouteDetails{}, false
++}
+diff --git a/net/netmon/hostroute_test.go b/net/netmon/hostroute_test.go
+new file mode 100644
+index 0000000..dbc73d8
+--- /dev/null
++++ b/net/netmon/hostroute_test.go
+@@ -0,0 +1,16 @@
++package netmon
++
++import "testing"
++
++func TestHarmonyProblematicInterfaces(t *testing.T) {
++	for _, name := range []string{"rmnet_ims0", "rmnet_ims1", "ancormnet0", "vpn-tun"} {
++		if !isHarmonyProblematicInterface(name) {
++			t.Errorf("control-plane or overlay interface %q was allowed", name)
++		}
++	}
++	for _, name := range []string{"rmnet0", "rmnet4", "rmnet_data0", "wlan0", "eth0", "usb0", "rndis0", "en0"} {
++		if isHarmonyProblematicInterface(name) {
++			t.Errorf("physical interface %q was excluded", name)
++		}
++	}
++}
 diff --git a/net/netmon/interfaces_linux.go b/net/netmon/interfaces_linux.go
-index 64cb0b9..90a2bbb 100644
+index d0fb15a..1900d71 100644
 --- a/net/netmon/interfaces_linux.go
 +++ b/net/netmon/interfaces_linux.go
-@@ -24,6 +24,7 @@
- 	"golang.org/x/sys/unix"
- 	"tailscale.com/feature/buildfeatures"
- 	"tailscale.com/net/netaddr"
-+	"tailscale.com/syncs"
- 	"tailscale.com/util/lineiter"
- )
- 
-@@ -126,6 +127,30 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
- 	return netip.Addr{}, netip.Addr{}, false
+@@ -123,6 +123,9 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
  }
  
-+// lastKnownDefaultRouteIfName holds the default route interface reported by
-+// the embedding host application through UpdateLastKnownDefaultRouteInterface.
-+// It is consulted only when the kernel routing table cannot be read at all.
-+var lastKnownDefaultRouteIfName syncs.AtomicValue[string]
-+
-+// UpdateLastKnownDefaultRouteInterface records the interface that currently
-+// carries the default route, as reported by the host network manager.
-+//
-+// tailscaled normally learns this from /proc/net/route or an AF_NETLINK route
-+// dump. Inside an OpenHarmony application sandbox both are unavailable: the
-+// /proc view is reduced to the process's own routes and carries no default
-+// entry, and AF_NETLINK route dumps are denied. Without a default interface
-+// name magicsock cannot tell whether a rebind moved the node to a different
-+// network, so it skips tearing down DERP connections that no longer work and
-+// stale relay paths survive a Wi-Fi/cellular handover.
-+//
-+// Android solves this the same way, with libtailscale reporting the interface
-+// from ConnectivityManager. Passing an empty name clears the hint.
-+func UpdateLastKnownDefaultRouteInterface(ifName string) {
-+	if old := lastKnownDefaultRouteIfName.Swap(ifName); old != ifName {
-+		log.Printf("defaultroute: update from host, ifName = %s (was %s)", ifName, old)
-+	}
-+}
-+
  func defaultRoute() (d DefaultRouteDetails, err error) {
++	if host, known := hostDefaultRoute(); known {
++		return host, nil
++	}
  	v, err := defaultRouteInterfaceProcNet()
  	if err == nil {
-@@ -149,7 +174,113 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
- 	// as a fallback for weird environments where netlink might be
- 	// banned but /proc/net/route is emulated (e.g. stuff like
- 	// Cloud Run?).
--	return defaultRouteFromNetlink()
-+	fromNetlink, netlinkErr := defaultRouteFromNetlink()
-+	if netlinkErr == nil {
-+		return fromNetlink, nil
-+	}
-+	if fallback, ok := fallbackDefaultRoute(); ok {
-+		return fallback, nil
-+	}
-+	return d, netlinkErr
-+}
-+
-+// fallbackDefaultRoute resolves the default route interface from outside the
-+// kernel routing table, for sandboxes where neither /proc/net/route nor
-+// AF_NETLINK exposes it.
-+//
-+// Preference order: the interface the host application named, then (on
-+// OpenHarmony only) the best local candidate by address and interface name. The
-+// bool is false when neither source yields an interface that exists and is up.
-+func fallbackDefaultRoute() (d DefaultRouteDetails, ok bool) {
-+	if ifName := lastKnownDefaultRouteIfName.Load(); ifName != "" {
-+		if ifc, err := net.InterfaceByName(ifName); err == nil && isUp(ifc) {
-+			return DefaultRouteDetails{InterfaceName: ifc.Name, InterfaceIndex: ifc.Index}, true
-+		}
-+		// A stale name must not keep winning after a handover.
-+		lastKnownDefaultRouteIfName.Store("")
-+	}
-+	if !isHarmonyOS {
-+		return d, false
-+	}
-+	if ifc := guessHarmonyDefaultRouteInterface(); ifc != nil {
-+		return DefaultRouteDetails{InterfaceName: ifc.Name, InterfaceIndex: ifc.Index}, true
-+	}
-+	return d, false
-+}
-+
-+// guessHarmonyDefaultRouteInterface picks the local interface most likely to
-+// carry the default route on a HarmonyOS phone, for the case where the host
-+// application has not reported one yet (engine start happens before the
-+// network manager answers).
-+//
-+// The carrier-facing data bearer always wins over Wi-Fi only when no Wi-Fi
-+// interface has a usable address, which mirrors the usual preference for a
-+// cheaper path; in practice both are acceptable answers, and the host
-+// application corrects this as soon as it reports the real interface.
-+func guessHarmonyDefaultRouteInterface() *net.Interface {
-+	candidates, err := net.Interfaces()
-+	if err != nil {
-+		return nil
-+	}
-+	var best *net.Interface
-+	bestScore := 0
-+	for i := range candidates {
-+		ifc := &candidates[i]
-+		if !isUp(ifc) || isLoopback(ifc) || isProblematicInterface(ifc) {
-+			continue
-+		}
-+		if !interfaceHasRoutableAddress(ifc) {
-+			continue
-+		}
-+		score := harmonyInterfaceScore(ifc.Name)
-+		if score > bestScore {
-+			best, bestScore = ifc, score
-+		}
-+	}
-+	return best
-+}
-+
-+// harmonyInterfaceScore ranks interface names from a HarmonyOS phone. Higher is
-+// a better default-route candidate; 0 means "do not use".
-+func harmonyInterfaceScore(name string) int {
-+	switch {
-+	case name == "rmnet0", name == "rmnet1", name == "rmnet2":
-+		// The cellular data bearers, in order of preference.
-+		return 40 - int(name[len(name)-1]-'0')
-+	case strings.HasPrefix(name, "rmnet_data"):
-+		return 36
-+	case strings.HasPrefix(name, "wlan"), strings.HasPrefix(name, "wifi"):
-+		return 30
-+	case strings.HasPrefix(name, "eth"), name == "usb0":
-+		return 20
-+	}
-+	return 0
-+}
-+
-+// interfaceHasRoutableAddress reports whether ifc carries at least one
-+// non-loopback, non-link-local unicast address. Interfaces without one cannot
-+// reach a peer, so they must never be named as the default route.
-+func interfaceHasRoutableAddress(ifc *net.Interface) bool {
-+	addrs, err := ifc.Addrs()
-+	if err != nil {
-+		return false
-+	}
-+	for _, addr := range addrs {
-+		ipNet, ok := addr.(*net.IPNet)
-+		if !ok {
-+			continue
-+		}
-+		ip, ok := netip.AddrFromSlice(ipNet.IP)
-+		if !ok {
-+			continue
-+		}
-+		ip = ip.Unmap()
-+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-+			continue
-+		}
-+		return true
-+	}
-+	return false
- }
- 
- func defaultRouteFromNetlink() (d DefaultRouteDetails, err error) {
+ 		d.InterfaceName = v
 diff --git a/net/netmon/state.go b/net/netmon/state.go
-index 94554dc..fdf1803 100644
+index bd09607..d6e6b8c 100644
 --- a/net/netmon/state.go
 +++ b/net/netmon/state.go
-@@ -49,6 +49,42 @@ func isProblematicInterface(nif *net.Interface) bool {
- 		(runtime.GOOS == "windows" && strings.Contains(name, "ZeroTier")) {
+@@ -43,9 +43,20 @@ func isProblematicInterface(nif *net.Interface) bool {
+ 	if strings.HasPrefix(name, "zt") || (runtime.GOOS == "windows" && strings.Contains(name, "ZeroTier")) {
  		return true
  	}
 +	if isHarmonyOS && isHarmonyProblematicInterface(name) {
 +		return true
 +	}
-+	return false
-+}
-+
-+// isHarmonyProblematicInterface reports whether name belongs to an OpenHarmony
-+// interface that peer-to-peer traffic can never use.
-+//
-+// A phone exposes more interfaces than a desktop Linux host, and several of
-+// them carry routable-looking addresses that are worthless as discovery
-+// candidates: the operator anchor interface (172.17.0.1 plus a matching IPv6
-+// address), the IMS/VoLTE data bearer, and a set of virtual interfaces. Every
-+// one of them ends up in the endpoint list magicsock announces, which both
-+// wastes discovery pings and hides the addresses that can actually work.
-+func isHarmonyProblematicInterface(name string) bool {
-+	switch {
-+	case strings.HasPrefix(name, "rmnet_ims"):
-+		// IMS (VoLTE/VoNR) data bearer. It is a modem control plane
-+		// interface with its own IPv6 prefix; it never carries user data.
-+		return true
-+	case strings.HasPrefix(name, "ancormnet"):
-+		// Operator anchor interface (172.17.0.1/24 in the carriers we have
-+		// samples for). The address is a device-local anchor, not a path.
-+		return true
-+	case name == "vpn-tun":
-+		// The VPN interface this application itself creates. Its addresses
-+		// belong to the tunnel, so advertising them as physical candidates
-+		// would be circular.
-+		return true
-+	case name == "dummy0", strings.HasPrefix(name, "ifb"),
-+		strings.HasPrefix(name, "ip_vti"), strings.HasPrefix(name, "ip6_vti"),
-+		strings.HasPrefix(name, "ip6tnl"), strings.HasPrefix(name, "sit"),
-+		strings.HasPrefix(name, "hw_sate_vnet"):
-+		return true
-+	}
  	return false
  }
  
++// PR #11 identified modem control-plane and operator anchor addresses being
++// advertised as peer endpoints. Neither can carry user traffic; vpn-tun is our
++// own overlay, so including it would be circular. Keep real cellular, Wi-Fi,
++// Ethernet and tethering interfaces eligible regardless of their names.
++func isHarmonyProblematicInterface(name string) bool {
++	return strings.HasPrefix(name, "rmnet_ims") || strings.HasPrefix(name, "ancormnet") || name == "vpn-tun"
++}
++
+ // LocalAddresses returns the machine's IP addresses, separated by
+ // whether they're loopback addresses. If there are no regular addresses
+ // it will return any IPv4 linklocal or IPv6 unique local addresses because we
 diff --git a/tsnet/tsnet.go b/tsnet/tsnet.go
-index 14a35cb..87c3b1f 100644
+index 65367f2..3c7b497 100644
 --- a/tsnet/tsnet.go
 +++ b/tsnet/tsnet.go
-@@ -137,6 +137,7 @@
- package tsnet
+@@ -26,9 +26,11 @@
+ 	"sync"
+ 	"time"
  
- import (
-+	"cmp"
- 	"context"
- 	crand "crypto/rand"
- 	"crypto/tls"
-@@ -161,6 +162,7 @@
- 	"github.com/tailscale/wireguard-go/tun"
++	"github.com/tailscale/wireguard-go/tun"
  	"tailscale.com/client/local"
+ 	"tailscale.com/client/tailscale"
  	"tailscale.com/control/controlclient"
 +	"tailscale.com/drive/driveimpl"
  	"tailscale.com/envknob"
- 	_ "tailscale.com/feature/c2n"
- 	_ "tailscale.com/feature/condregister/netlog"
-@@ -181,9 +183,11 @@
- 	"tailscale.com/logtail"
- 	"tailscale.com/logtail/filch"
- 	"tailscale.com/net/memnet"
-+	"tailscale.com/net/netcheck"
+ 	"tailscale.com/health"
+ 	"tailscale.com/hostinfo"
+@@ -46,6 +48,7 @@
  	"tailscale.com/net/netmon"
  	"tailscale.com/net/proxymux"
  	"tailscale.com/net/socks5"
 +	"tailscale.com/net/tsaddr"
  	"tailscale.com/net/tsdial"
- 	"tailscale.com/tailcfg"
  	"tailscale.com/tsd"
-@@ -204,6 +208,19 @@
+ 	"tailscale.com/types/bools"
+@@ -64,6 +67,25 @@
  //
  // Its exported fields may be changed until the first method call.
  type Server struct {
++	// Tun optionally supplies an OS-managed TUN device. When set, tsnet sends
++	// tailnet packets to that device instead of consuming them in netstack.
++	// This is used by HarmonyOS VpnExtensionAbility, which owns interface and
++	// route creation and returns only a raw packet file descriptor.
++	Tun tun.Device
++
 +	// UseNetstackForPeerDial keeps peer and PeerAPI TCP/UDP dials inside
 +	// tsnet's userspace netstack even when Tun is externally supplied.
 +	// Platforms that exclude their own VPN bundle from system VPN routing need
@@ -372,7 +417,7 @@ index 14a35cb..87c3b1f 100644
  	// Dir specifies the name of the directory to use for
  	// state. If empty, a directory is selected automatically
  	// under os.UserConfigDir (https://golang.org/pkg/os/#UserConfigDir).
-@@ -404,6 +421,46 @@ func (s *Server) HTTPClient() *http.Client {
+@@ -219,6 +241,46 @@ func (s *Server) HTTPClient() *http.Client {
  	}
  }
  
@@ -419,32 +464,23 @@ index 14a35cb..87c3b1f 100644
  // LocalClient returns a LocalClient that speaks to s.
  //
  // It will start the server if it has not been started yet. If the server's
-@@ -415,6 +472,223 @@ func (s *Server) LocalClient() (*local.Client, error) {
+@@ -230,6 +292,60 @@ func (s *Server) LocalClient() (*local.Client, error) {
  	return s.localClient, nil
  }
  
-+// NotifyNetworkChange asks the embedded network monitor to resample host
-+// interfaces and waits until that sample has been published. This is intended
-+// for application-sandboxed platforms whose native network callbacks are more
-+// reliable than the netlink stream visible to the Go runtime.
-+//
-+// It returns whether an explicit socket rebind was needed. A rebind is always
-+// performed when the caller observed a usable physical network: relying on
-+// netmon's own change classification left magicsock on its previous sockets and
-+// on a stale STUN endpoint, which pinned peers to a dead address and kept them
-+// on DERP after a Wi-Fi <-> cellular switch.
-+func (s *Server) NotifyNetworkChange(ctx context.Context) (explicitRebind bool, err error) {
-+	if err := s.Start(); err != nil {
-+		return false, err
-+	}
++// NotifyNetworkChange resamples sandboxed host interfaces and refreshes UDP
++// sockets after a host network callback. Adapted from charleypeng's PR #11;
++// keep the route hint and sample in one call so they cannot race each other.
++func (s *Server) NotifyNetworkChange(ctx context.Context, interfaceName string) error {
 +	if s.lb == nil || s.lb.NetMon() == nil {
-+		return false, errors.New("tsnet: network monitor unavailable")
++		return errors.New("tsnet: network monitor unavailable")
 +	}
++	netmon.UpdateLastKnownDefaultRouteInterface(interfaceName)
 +	mon := s.lb.NetMon()
-+	deltaCh := make(chan *netmon.ChangeDelta, 1)
-+	unregister := mon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
++	changed := make(chan struct{}, 1)
++	unregister := mon.RegisterChangeCallback(func(*netmon.ChangeDelta) {
 +		select {
-+		case deltaCh <- delta:
++		case changed <- struct{}{}:
 +		default:
 +		}
 +	})
@@ -452,198 +488,44 @@ index 14a35cb..87c3b1f 100644
 +	mon.InjectEvent()
 +	select {
 +	case <-ctx.Done():
-+		return false, ctx.Err()
-+	case delta := <-deltaCh:
-+		if delta == nil || !delta.AnyInterfaceUp() {
-+			return false, errors.New("tsnet: no usable network interface")
++		return ctx.Err()
++	case <-changed:
++		if err := ctx.Err(); err != nil {
++			return err
 +		}
-+		// Rebind is cheap and idempotent: it reopens the UDP sockets, refreshes
-+		// the STUN sample through netcheck, and clears every peer's endpoint
-+		// state so direct paths are punched again.
++		if interfaceName == "" {
++			return nil
++		}
++		// A netId or address can change without changing the interface name.
++		// Explicit rebind also restarts discovery when netmon calls it minor.
 +		if err := s.lb.DebugRebind(); err != nil {
-+			return false, err
++			return err
 +		}
-+		// The engine's own netmon callback already queued a rebind for the
-+		// major changes it could see.
-+		return !delta.RebindLikelyRequired, nil
++		// In v1.86 Rebind only resets sockets and peer paths. Refresh the STUN
++		// endpoint explicitly so peers learn the new cellular/Wi-Fi address.
++		return s.lb.DebugReSTUN()
 +	}
 +}
 +
-+// NetworkDiagnostics reports the local facts that decide whether a direct peer
-+// path is possible: the UDP port magicsock holds, the endpoints the host
-+// exposes, and the latest netcheck result (UDP/STUN reachability, per
-+// destination NAT mapping behaviour and port-mapping availability). The result
-+// is a single diagnostic line; it never contacts the network.
-+func (s *Server) NetworkDiagnostics(ctx context.Context) string {
-+	if err := s.Start(); err != nil {
-+		return "FAILED | diagnostics | backend start"
++// NetworkDiagnostics returns cached, address-free path-discovery facts. Reading
++// status must never trigger a network request or expose keys/public endpoints.
++func (s *Server) NetworkDiagnostics() string {
++	if s.lb == nil || s.lb.MagicConn() == nil {
++		return "netCheck=unavailable"
 +	}
-+	if s.lb == nil {
-+		return "FAILED | diagnostics | backend unavailable"
++	mc := s.lb.MagicConn()
++	r := mc.GetLastNetcheckReport(context.Background())
++	if r == nil {
++		return "netCheck=pending"
 +	}
-+	var b strings.Builder
-+	if mc := s.lb.MagicConn(); mc != nil {
-+		// configuredPort is the port the caller pinned in Server.Port; a
-+		// localPort that differs from it means magicsock had to fall back to
-+		// an ephemeral port, which is worth knowing because the announced
-+		// "<public IP>:<local port>" candidate depends on it.
-+		fmt.Fprintf(&b, "localPort=%d|configuredPort=%d", mc.LocalPort(), s.Port)
-+		if rep := mc.GetLastNetcheckReport(ctx); rep != nil {
-+			fmt.Fprintf(&b,
-+				"|udp=%t|ipv4=%t|ipv6=%t|mappingVariesByDestIP=%s|upnp=%s|pmp=%s|pcp=%s"+
-+					"|globalV4=%s|globalV6=%s|preferredDERP=%d|icmpV4=%t|captive=%s"+
-+					"|v4Mappings=%s|derpLatency=%s",
-+				rep.UDP, rep.IPv4, rep.IPv6,
-+				rep.MappingVariesByDestIP, rep.UPnP, rep.PMP, rep.PCP,
-+				diagnosticAddrPort(rep.GlobalV4), diagnosticAddrPort(rep.GlobalV6), rep.PreferredDERP,
-+				rep.ICMPv4, rep.CaptivePortal,
-+				diagnosticAddrPortCounters(rep.GlobalV4Counters, 4),
-+				diagnosticDERPLatency(s.lb.DERPMap(), rep))
-+		} else {
-+			b.WriteString("|netcheck=unavailable")
-+		}
-+	}
-+	if mon := s.lb.NetMon(); mon != nil {
-+		if st := mon.InterfaceState(); st != nil {
-+			fmt.Fprintf(&b, "|defaultIf=%s|haveV4=%t|haveV6=%t",
-+				st.DefaultRouteInterface, st.HaveV4, st.HaveV6)
-+			names := make([]string, 0, len(st.InterfaceIPs))
-+			for name := range st.InterfaceIPs {
-+				names = append(names, name)
-+			}
-+			slices.Sort(names)
-+			interfaces := make([]string, 0, len(names))
-+			for _, name := range names {
-+				prefixes := st.InterfaceIPs[name]
-+				addresses := make([]string, 0, len(prefixes))
-+				for _, prefix := range prefixes {
-+					addresses = append(addresses, prefix.String())
-+				}
-+				slices.Sort(addresses)
-+				interfaces = append(interfaces, name+"="+strings.Join(addresses, ","))
-+			}
-+			fmt.Fprintf(&b, "|interfaces=%s", strings.Join(interfaces, ";"))
-+		}
-+	}
-+	return b.String()
++	return fmt.Sprintf("netUDP=%t | netIPv4=%t | netIPv6=%t | netMappingVaries=%s | netPort=%d",
++		r.UDP, r.IPv4, r.IPv6, r.MappingVariesByDestIP, mc.LocalPort())
 +}
 +
-+// SetMagicsockDebugLogging switches magicsock's verbose path-discovery logging.
-+//
-+// magicsock reports which candidate endpoints it holds, which discovery pings
-+// it sends, and which pongs time out only through this logger, and the upstream
-+// switch for it is gated behind the debug build feature plus a syspolicy
-+// component toggle. Field diagnosis of a relayed path needs those lines, so
-+// expose the switch directly and let the caller bound the window.
-+func (s *Server) SetMagicsockDebugLogging(enabled bool) {
-+	if err := s.Start(); err != nil || s.lb == nil {
-+		return
-+	}
-+	if mc := s.lb.MagicConn(); mc != nil {
-+		mc.SetDebugLoggingEnabled(enabled)
-+	}
-+}
-+
-+func diagnosticAddrPort(value netip.AddrPort) string {
-+	if !value.IsValid() {
-+		return "none"
-+	}
-+	return value.String()
-+}
-+
-+// diagnosticAddrPortCounters lists the STUN-observed external addresses for the
-+// current network. More than one distinct mapping, or a mapping whose port
-+// differs from the local port, is what makes inbound hole punching unreliable.
-+func diagnosticAddrPortCounters(counters map[netip.AddrPort]int, limit int) string {
-+	if len(counters) == 0 {
-+		return "none"
-+	}
-+	addresses := make([]string, 0, len(counters))
-+	for address, count := range counters {
-+		addresses = append(addresses, fmt.Sprintf("%s#%d", address, count))
-+	}
-+	slices.Sort(addresses)
-+	if len(addresses) > limit {
-+		addresses = addresses[:limit]
-+	}
-+	return strings.Join(addresses, ",")
-+}
-+
-+// diagnosticDERPLatency reports the closest DERP regions by measured latency.
-+// A node whose nearest region is on another continent has a measurement problem,
-+// which also shows up as unusually slow relayed peer paths.
-+func diagnosticDERPLatency(derpMap *tailcfg.DERPMap, report *netcheck.Report) string {
-+	if derpMap == nil {
-+		return "none"
-+	}
-+	latency := report.RegionLatency
-+	if len(report.RegionV4Latency) > 0 {
-+		latency = report.RegionV4Latency
-+	}
-+	regions := make([]int, 0, len(latency))
-+	for id := range latency {
-+		regions = append(regions, id)
-+	}
-+	slices.SortFunc(regions, func(x, y int) int {
-+		return cmp.Compare(latency[x], latency[y])
-+	})
-+	if len(regions) > 4 {
-+		regions = regions[:4]
-+	}
-+	entries := make([]string, 0, len(regions))
-+	for _, id := range regions {
-+		code := strconv.Itoa(id)
-+		if region, ok := derpMap.Regions[id]; ok && region.RegionCode != "" {
-+			code = region.RegionCode
-+		}
-+		entries = append(entries, fmt.Sprintf("%s=%dms", code, latency[id].Milliseconds()))
-+	}
-+	if len(entries) == 0 {
-+		return "none"
-+	}
-+	return strings.Join(entries, ",")
-+}
-+
-+// NetmapEndpointReport returns the endpoint addresses the coordination server
-+// currently publishes for this node and for every peer, keyed by peer name.
-+//
-+// A direct path is only possible when the remote side advertises at least one
-+// address the local host can reach, and magicsock resolves peer endpoints from
-+// this netmap list plus whatever it learns from inbound discovery traffic.
-+// Nothing else exposes the list: [ipnstate.PeerStatus.Addrs] is a deprecated
-+// field that magicsock never fills for peers, so a relayed path cannot be
-+// explained without reading the netmap itself.
-+func (s *Server) NetmapEndpointReport() (self []string, peers map[string][]string) {
-+	if err := s.Start(); err != nil || s.lb == nil {
-+		return nil, nil
-+	}
-+	nm := s.lb.NetMapWithPeers()
-+	if nm == nil {
-+		return nil, nil
-+	}
-+	if selfNode := nm.SelfNode; selfNode.Valid() {
-+		self = diagnosticAddrPorts(selfNode.Endpoints())
-+	}
-+	peers = make(map[string][]string, len(nm.Peers))
-+	for _, peer := range nm.Peers {
-+		peers[peer.Name()] = diagnosticAddrPorts(peer.Endpoints())
-+	}
-+	return self, peers
-+}
-+
-+func diagnosticAddrPorts(endpoints views.Slice[netip.AddrPort]) []string {
-+	addresses := make([]string, 0, endpoints.Len())
-+	for _, endpoint := range endpoints.All() {
-+		addresses = append(addresses, endpoint.String())
-+	}
-+	slices.Sort(addresses)
-+	return addresses
-+}
-+
- // TestHooks are hooks meant for internal-testing only; they're not stable
- // or documented, intentionally.
- var TestHooks testHooks
-@@ -660,6 +934,10 @@ func (s *Server) close() {
+ // Loopback starts a routing server on a loopback address.
+ //
+ // The server has multiple functions.
+@@ -427,6 +543,10 @@ func (s *Server) Close() error {
  	if s.localAPIListener != nil {
  		s.localAPIListener.Close()
  	}
@@ -654,45 +536,50 @@ index 14a35cb..87c3b1f 100644
  	if s.loopbackListener != nil {
  		s.loopbackListener.Close()
  	}
-@@ -846,6 +1124,9 @@ func (s *Server) start() (reterr error) {
+@@ -570,7 +690,11 @@ func (s *Server) start() (reterr error) {
+ 	closePool.add(s.netMon)
  
  	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
- 	s.dialer.SetBus(sys.Bus.Get())
 +	externalTun := s.Tun != nil
 +	s.taildriveFS = driveimpl.NewFileSystemForLocal(tsLogf)
 +	closePool.add(s.taildriveFS)
  	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
- 		Tun:           s.Tun,
++		Tun:           s.Tun,
  		EventBus:      sys.Bus.Get(),
-@@ -857,6 +1138,7 @@ func (s *Server) start() (reterr error) {
- 		HealthTracker: sys.HealthTracker.Get(),
- 		ExtraRootCAs:  sys.ExtraRootCAs,
+ 		ListenPort:    s.Port,
+ 		NetMon:        s.netMon,
+@@ -579,6 +703,7 @@ func (s *Server) start() (reterr error) {
+ 		ControlKnobs:  sys.ControlKnobs(),
+ 		HealthTracker: sys.HealthTracker(),
  		Metrics:       sys.UserMetricsRegistry(),
 +		DriveForLocal: s.taildriveFS,
  	})
  	if err != nil {
  		return err
-@@ -878,6 +1160,8 @@ func (s *Server) start() (reterr error) {
- 		ns.ProcessLocalIPs = true
- 		ns.ProcessSubnets = true
- 	} else {
-+		ns.ProcessLocalIPs = false
-+		ns.ProcessSubnets = false
- 		// When using a TUN, check gVisor for registered endpoints to handle
- 		// packets for tsnet listeners and outbound connection replies.
- 		ns.CheckLocalTransportEndpoints = true
-@@ -885,10 +1169,16 @@ func (s *Server) start() (reterr error) {
+@@ -587,21 +712,26 @@ func (s *Server) start() (reterr error) {
+ 	sys.Set(eng)
+ 	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
+ 
+-	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
+ 	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
+ 	if err != nil {
+ 		return fmt.Errorf("netstack.Create: %w", err)
+ 	}
+ 	sys.Tun.Get().Start()
+ 	sys.Set(ns)
+-	ns.ProcessLocalIPs = true
+-	ns.ProcessSubnets = true
++	ns.ProcessLocalIPs = !externalTun
++	ns.ProcessSubnets = !externalTun
  	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
  	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
  	s.netstack = ns
 -	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
--		// s.lb is assigned below, before any dials can happen.
--		_, ok := s.lb.PeerForIP(ip)
+-		_, ok := eng.PeerForIP(ip)
 -		return ok
 +	if !externalTun {
 +		s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-+			// s.lb is assigned below, before any dials can happen.
-+			_, ok := s.lb.PeerForIP(ip)
++			_, ok := eng.PeerForIP(ip)
 +			return ok
 +		}
 +	} else if s.UseNetstackForPeerDial {
@@ -702,7 +589,7 @@ index 14a35cb..87c3b1f 100644
  	}
  	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
  		// Note: don't just return ns.DialContextTCP or we'll return
-@@ -896,6 +1186,9 @@ func (s *Server) start() (reterr error) {
+@@ -609,6 +739,9 @@ func (s *Server) start() (reterr error) {
  		// callers.
  		v4, v6 := s.TailscaleIPs()
  		src := bools.IfElse(dst.Addr().Is6(), v6, v4)
@@ -713,10 +600,10 @@ index 14a35cb..87c3b1f 100644
  		if err != nil {
  			return nil, err
 diff --git a/wgengine/netstack/netstack.go b/wgengine/netstack/netstack.go
-index 17ba3df..643fd4f 100644
+index d97c669..6b7248f 100644
 --- a/wgengine/netstack/netstack.go
 +++ b/wgengine/netstack/netstack.go
-@@ -268,6 +268,12 @@ type Impl struct {
+@@ -228,6 +228,12 @@ type Impl struct {
  	// global limit, preventing a misbehaving client from starving the
  	// global limit.
  	connsInFlightByClient map[netip.Addr]int
@@ -729,7 +616,7 @@ index 17ba3df..643fd4f 100644
  	// packetsInFlight tracks whether we're already handling a packet by
  	// the given endpoint ID; clients can send repeated SYN packets while
  	// trying to establish a connection (and while we're dialing the
-@@ -430,6 +436,8 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
+@@ -390,6 +396,8 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
  		dialer:                dialer,
  		connsOpenBySubnetIP:   make(map[netip.Addr]int),
  		connsInFlightByClient: make(map[netip.Addr]int),
@@ -738,7 +625,7 @@ index 17ba3df..643fd4f 100644
  		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
  		dns:                   dns,
  	}
-@@ -982,6 +990,89 @@ func (ns *Impl) DialContextTCPWithBind(ctx context.Context, localAddr netip.Addr
+@@ -870,6 +878,89 @@ func (ns *Impl) DialContextTCPWithBind(ctx context.Context, localAddr netip.Addr
  	return gonet.DialTCPWithBind(ctx, ns.ipstack, localAddress, remoteAddress, ipType)
  }
  
@@ -828,7 +715,7 @@ index 17ba3df..643fd4f 100644
  func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error) {
  	remoteAddress := &tcpip.FullAddress{
  		NIC:  nicID,
-@@ -1211,6 +1302,9 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
+@@ -1052,6 +1143,9 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
  	dstIP := p.Dst.Addr()
  	isLocal := ns.isLocalIP(dstIP)
  	isService := ns.isVIPServiceIP(dstIP)
@@ -838,3 +725,47 @@ index 17ba3df..643fd4f 100644
  
  	// Handle TCP connection to the Tailscale IP(s) in some cases:
  	if ns.lb != nil && p.IPProto == ipproto.TCP && isLocal {
+diff --git a/wgengine/netstack/netstack_test.go b/wgengine/netstack/netstack_test.go
+index 584b3ba..f6f053d 100644
+--- a/wgengine/netstack/netstack_test.go
++++ b/wgengine/netstack/netstack_test.go
+@@ -513,6 +513,39 @@ func tcp4syn(tb testing.TB, src, dst netip.Addr, sport, dport uint16) []byte {
+ 	return ip
+ }
+ 
++func TestTrackedDialTCPPortLifecycle(t *testing.T) {
++	localAddr := netip.MustParseAddr("100.64.0.1")
++	impl := &Impl{
++		dialedTCPPorts:  make(map[netip.AddrPort]struct{}),
++		nextDialTCPPort: firstTrackedDialTCPPort,
++	}
++
++	reserved, ok := impl.reserveDialTCPPort(localAddr)
++	if !ok {
++		t.Fatal("reserveDialTCPPort unexpectedly failed")
++	}
++	if got, want := reserved.Port(), firstTrackedDialTCPPort; got != want {
++		t.Fatalf("reserved port = %d, want %d", got, want)
++	}
++	if !impl.isDialedTCPPort(reserved) {
++		t.Fatal("reserved port is not tracked")
++	}
++	impl.releaseDialTCPPort(reserved)
++	if impl.isDialedTCPPort(reserved) {
++		t.Fatal("released port remains tracked")
++	}
++
++	impl.nextDialTCPPort = lastTrackedDialTCPPort
++	last, ok := impl.reserveDialTCPPort(localAddr)
++	if !ok || last.Port() != lastTrackedDialTCPPort {
++		t.Fatalf("last reservation = %v, %v", last, ok)
++	}
++	wrapped, ok := impl.reserveDialTCPPort(localAddr)
++	if !ok || wrapped.Port() != firstTrackedDialTCPPort {
++		t.Fatalf("wrapped reservation = %v, %v", wrapped, ok)
++	}
++}
++
+ // makeHangDialer returns a dialer that notifies the returned channel when a
+ // connection is dialed and then hangs until the test finishes.
+ func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {

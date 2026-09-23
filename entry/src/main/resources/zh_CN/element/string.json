@@ -1,10 +1,8 @@
 {
   "string": [
-    { "name": "background_running_reason", "value": "应用退到后台后，保持 VPN 隧道与设备连接不中断。" },
-    { "name": "permission_short_term_write_imagevideo_reason", "value": "将收到的图片和视频保存到系统图库。" },
     { "name": "taildrive_title", "value": "\u8fdc\u7a0b\u6587\u4ef6" },
-    { "name": "taildrive_subtitle", "value": "\u6d4f\u89c8 Tailnet \u8bbe\u5907\u5171\u4eab\u7684\u6587\u4ef6\u5939\u3002" },
-    { "name": "taildrive_connect_first", "value": "\u8bf7\u5148\u8fde\u63a5 Tailscale \u4ee5\u6d4f\u89c8\u8fdc\u7a0b\u6587\u4ef6\u3002" },
+    { "name": "taildrive_subtitle", "value": "\u6d4f\u89c8 Tailnet \u8bbe\u5907\u5171\u4eab\u7684\u6587\u4ef6\u5939" },
+    { "name": "taildrive_connect_first", "value": "\u8bf7\u5148\u8fde\u63a5 Tailscale \u4ee5\u6d4f\u89c8\u8fdc\u7a0b\u6587\u4ef6" },
     { "name": "taildrive_refresh_action", "value": "\u5237\u65b0" },
     { "name": "taildrive_up_action", "value": "\u4e0a\u4e00\u7ea7" },
     { "name": "taildrive_new_folder_action", "value": "\u65b0\u5efa\u6587\u4ef6\u5939" },
@@ -28,7 +26,7 @@
     { "name": "taildrive_preview_download_title", "value": "\u4e0b\u8f7d\u540e\u9884\u89c8" },
     { "name": "taildrive_preview_download_message", "value": "\u9884\u89c8\u201c%s\u201d\u524d\u9700\u8981\u5148\u4e0b\u8f7d\u5230\u5e94\u7528\u79c1\u6709\u6587\u4ef6\u5939\u3002\\n\u7c7b\u578b\uff1a%s\\n\u5927\u5c0f\uff1a%s" },
     { "name": "taildrive_preview_download_action", "value": "\u4e0b\u8f7d" },
-    { "name": "taildrive_preview_download_hint", "value": "\u8be5\u6587\u4ef6\u4e3a 5 MB \u6216\u66f4\u5927\uff0c\u4e0b\u8f7d\u540e\u624d\u80fd\u9884\u89c8\u3002" },
+    { "name": "taildrive_preview_download_hint", "value": "\u8be5\u6587\u4ef6\u4e3a 5 MB \u6216\u66f4\u5927\uff0c\u4e0b\u8f7d\u540e\u624d\u80fd\u9884\u89c8" },
     { "name": "taildrive_loading", "value": "\u6b63\u5728\u8bfb\u53d6\u6587\u4ef6\u2026" },
     { "name": "taildrive_sort_name", "value": "\u6309\u540d\u79f0\u6392\u5e8f" },
     { "name": "taildrive_sort_modified", "value": "\u6309\u65f6\u95f4\u6392\u5e8f" },
@@ -70,96 +68,103 @@
     { "name": "taildrive_move_here_action", "value": "\u79fb\u52a8\u5230\u8fd9\u91cc" },
     { "name": "taildrive_overwrite_title", "value": "\u66ff\u6362\u5df2\u6709\u9879\uff1f" },
     { "name": "taildrive_replace_action", "value": "\u66ff\u6362" },
-    { "name": "taildrive_empty", "value": "\u8fd9\u91cc\u6ca1\u6709\u5171\u4eab\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u3002" },
-    { "name": "taildrive_list_failed", "value": "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u6587\u4ef6\u5939\uff0c\u8bf7\u68c0\u67e5 Taildrive \u6743\u9650\u540e\u91cd\u8bd5\u3002" },
+    { "name": "taildrive_empty", "value": "\u8fd9\u91cc\u6ca1\u6709\u5171\u4eab\u6587\u4ef6\u6216\u6587\u4ef6\u5939" },
+    { "name": "taildrive_list_failed", "value": "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u6587\u4ef6\u5939\uff0c\u8bf7\u68c0\u67e5 Taildrive \u6743\u9650\u540e\u91cd\u8bd5" },
     { "name": "taildrive_rename_action", "value": "\u91cd\u547d\u540d" },
     { "name": "taildrive_delete_action", "value": "\u5220\u9664" },
     { "name": "taildrive_delete_title", "value": "\u5220\u9664\u8fdc\u7a0b\u9879\uff1f" },
-    { "name": "taildrive_delete_selected_message", "value": "\u786e\u5b9a\u5220\u9664\u5df2\u9009\u62e9\u7684 %d \u9879\u5417\uff1f\u6b64\u64cd\u4f5c\u65e0\u6cd5\u64a4\u9500\u3002" },
+    { "name": "taildrive_delete_selected_message", "value": "\u786e\u5b9a\u5220\u9664\u5df2\u9009\u62e9\u7684 %d \u9879\u5417\uff1f\u6b64\u64cd\u4f5c\u65e0\u6cd5\u64a4\u9500" },
     { "name": "taildrive_new_folder_title", "value": "\u65b0\u5efa\u6587\u4ef6\u5939" },
     { "name": "taildrive_rename_title", "value": "\u91cd\u547d\u540d" },
     { "name": "taildrive_name_placeholder", "value": "\u540d\u79f0" },
     { "name": "confirm_action", "value": "\u786e\u5b9a" },
     { "name": "taildrive_transfer_in_progress", "value": "\u6b63\u5728\u4f20\u8f93\u6587\u4ef6" },
-    { "name": "taildrive_status_select_failed", "value": "\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\u9009\u62e9\u5668\u3002" },
+    { "name": "taildrive_status_select_failed", "value": "\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\u9009\u62e9\u5668" },
     { "name": "taildrive_status_uploading", "value": "\u6b63\u5728\u4e0a\u4f20\u2026" },
-    { "name": "taildrive_status_upload_completed", "value": "\u4e0a\u4f20\u5b8c\u6210\u3002" },
-    { "name": "taildrive_status_upload_failed", "value": "\u4e0a\u4f20\u5931\u8d25\u3002" },
+    { "name": "taildrive_status_upload_completed", "value": "\u4e0a\u4f20\u5b8c\u6210" },
+    { "name": "taildrive_status_upload_failed", "value": "\u4e0a\u4f20\u5931\u8d25" },
     { "name": "taildrive_status_downloading", "value": "\u6b63\u5728\u4e0b\u8f7d\u2026" },
-    { "name": "taildrive_status_export_cancelled", "value": "\u5df2\u53d6\u6d88\u4fdd\u5b58\u3002" },
-    { "name": "taildrive_status_download_completed", "value": "\u6587\u4ef6\u5df2\u4fdd\u5b58\u3002" },
-    { "name": "taildrive_status_export_failed", "value": "\u65e0\u6cd5\u4fdd\u5b58\u4e0b\u8f7d\u6587\u4ef6\u3002" },
+    { "name": "taildrive_status_export_cancelled", "value": "\u5df2\u53d6\u6d88\u4fdd\u5b58" },
+    { "name": "taildrive_status_download_completed", "value": "\u6587\u4ef6\u5df2\u4fdd\u5b58" },
+    { "name": "taildrive_status_export_failed", "value": "\u65e0\u6cd5\u4fdd\u5b58\u4e0b\u8f7d\u6587\u4ef6" },
     { "name": "taildrive_status_deleting", "value": "\u6b63\u5728\u5220\u9664\u2026" },
-    { "name": "taildrive_status_delete_completed", "value": "\u5df2\u5220\u9664\u3002" },
-    { "name": "taildrive_status_delete_failed", "value": "\u5220\u9664\u5931\u8d25\u3002" },
+    { "name": "taildrive_status_delete_completed", "value": "\u5df2\u5220\u9664" },
+    { "name": "taildrive_status_delete_failed", "value": "\u5220\u9664\u5931\u8d25" },
     { "name": "taildrive_status_creating_folder", "value": "\u6b63\u5728\u521b\u5efa\u6587\u4ef6\u5939\u2026" },
     { "name": "taildrive_status_renaming", "value": "\u6b63\u5728\u91cd\u547d\u540d\u2026" },
     { "name": "taildrive_status_moving", "value": "\u6b63\u5728\u79fb\u52a8\u2026" },
-    { "name": "taildrive_status_move_completed", "value": "\u79fb\u52a8\u5b8c\u6210\u3002" },
-    { "name": "taildrive_status_mutation_completed", "value": "\u64cd\u4f5c\u5b8c\u6210\u3002" },
-    { "name": "taildrive_status_mutation_failed", "value": "\u65e0\u6cd5\u4fee\u6539\u8fdc\u7a0b\u9879\u3002" },
-    { "name": "taildrive_status_invalid_name", "value": "\u8bf7\u8f93\u5165\u6709\u6548\u7684\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u540d\u79f0\u3002" },
-    { "name": "taildrive_status_same_location", "value": "\u8be5\u9879\u5df2\u5728\u5f53\u524d\u6587\u4ef6\u5939\u4e2d\u3002" },
-    { "name": "taildrive_status_target_not_found", "value": "\u672a\u627e\u5230\u8be5\u8bbe\u5907\u7684 Taildrive \u5171\u4eab\uff0c\u5df2\u663e\u793a\u5168\u90e8\u5171\u4eab\u3002" },
-    { "name": "taildrive_status_permission_denied", "value": "Taildrive \u6743\u9650\u88ab\u62d2\u7edd\u3002" },
-    { "name": "taildrive_status_not_found", "value": "\u8fdc\u7a0b\u9879\u5df2\u4e0d\u53ef\u7528\u3002" },
-    { "name": "taildrive_status_already_exists", "value": "\u5df2\u5b58\u5728\u540c\u540d\u9879\u3002" },
-    { "name": "taildrive_status_backend_unavailable", "value": "\u8bf7\u8fde\u63a5 Tailscale \u540e\u91cd\u8bd5\u3002" },
-    { "name": "taildrive_status_busy", "value": "\u53e6\u4e00\u4e2a Taildrive \u4f20\u8f93\u4ecd\u5728\u8fdb\u884c\u3002" },
-    { "name": "taildrive_status_cancelled", "value": "\u4f20\u8f93\u5df2\u53d6\u6d88\u3002" },
-    { "name": "taildrive_status_timeout", "value": "\u8fdc\u7a0b\u64cd\u4f5c\u8d85\u65f6\u3002" },
-    { "name": "taildrive_status_no_space", "value": "\u5b58\u50a8\u7a7a\u95f4\u4e0d\u8db3\u3002" },
-    { "name": "taildrive_status_remote_unavailable", "value": "\u8fdc\u7a0b\u8bbe\u5907\u4e0d\u53ef\u7528\u3002" },
-    { "name": "taildrive_status_network_interrupted", "value": "\u7f51\u7edc\u4f20\u8f93\u5df2\u4e2d\u65ad\u3002" },
-    { "name": "taildrive_status_file_unavailable", "value": "\u6240\u9009\u6587\u4ef6\u5df2\u4e0d\u53ef\u7528\u3002" },
-    { "name": "taildrive_status_transfer_failed", "value": "Taildrive \u64cd\u4f5c\u5931\u8d25\u3002" },
+    { "name": "taildrive_status_move_completed", "value": "\u79fb\u52a8\u5b8c\u6210" },
+    { "name": "taildrive_status_mutation_completed", "value": "\u64cd\u4f5c\u5b8c\u6210" },
+    { "name": "taildrive_status_mutation_failed", "value": "\u65e0\u6cd5\u4fee\u6539\u8fdc\u7a0b\u9879" },
+    { "name": "taildrive_status_invalid_name", "value": "\u8bf7\u8f93\u5165\u6709\u6548\u7684\u6587\u4ef6\u6216\u6587\u4ef6\u5939\u540d\u79f0" },
+    { "name": "taildrive_status_same_location", "value": "\u8be5\u9879\u5df2\u5728\u5f53\u524d\u6587\u4ef6\u5939\u4e2d" },
+    { "name": "taildrive_status_target_not_found", "value": "\u672a\u627e\u5230\u8be5\u8bbe\u5907\u7684 Taildrive \u5171\u4eab\uff0c\u5df2\u663e\u793a\u5168\u90e8\u5171\u4eab" },
+    { "name": "taildrive_status_permission_denied", "value": "Taildrive \u6743\u9650\u88ab\u62d2\u7edd" },
+    { "name": "taildrive_status_not_found", "value": "\u8fdc\u7a0b\u9879\u5df2\u4e0d\u53ef\u7528" },
+    { "name": "taildrive_status_already_exists", "value": "\u5df2\u5b58\u5728\u540c\u540d\u9879" },
+    { "name": "taildrive_status_backend_unavailable", "value": "\u8bf7\u8fde\u63a5 Tailscale \u540e\u91cd\u8bd5" },
+    { "name": "taildrive_status_busy", "value": "\u53e6\u4e00\u4e2a Taildrive \u4f20\u8f93\u4ecd\u5728\u8fdb\u884c" },
+    { "name": "taildrive_status_cancelled", "value": "\u4f20\u8f93\u5df2\u53d6\u6d88" },
+    { "name": "taildrive_status_timeout", "value": "\u8fdc\u7a0b\u64cd\u4f5c\u8d85\u65f6" },
+    { "name": "taildrive_status_no_space", "value": "\u5b58\u50a8\u7a7a\u95f4\u4e0d\u8db3" },
+    { "name": "taildrive_status_remote_unavailable", "value": "\u8fdc\u7a0b\u8bbe\u5907\u4e0d\u53ef\u7528" },
+    { "name": "taildrive_status_network_interrupted", "value": "\u7f51\u7edc\u4f20\u8f93\u5df2\u4e2d\u65ad" },
+    { "name": "taildrive_status_file_unavailable", "value": "\u6240\u9009\u6587\u4ef6\u5df2\u4e0d\u53ef\u7528" },
+    { "name": "taildrive_status_transfer_failed", "value": "Taildrive \u64cd\u4f5c\u5931\u8d25" },
     { "name": "taildrive_status_preview_downloading", "value": "\u6b63\u5728\u4e0b\u8f7d\u4ee5\u4fbf\u9884\u89c8\u2026" },
     { "name": "taildrive_status_preview_download_completed", "value": "\u4e0b\u8f7d\u5b8c\u6210\uff0c\u6b63\u5728\u6253\u5f00\u9884\u89c8\u2026" },
-    { "name": "taildrive_status_preview_download_failed", "value": "\u65e0\u6cd5\u4e0b\u8f7d\u6587\u4ef6\u4ee5\u4fbf\u9884\u89c8\u3002" },
-    { "name": "taildrive_status_preview_failed", "value": "\u6ca1\u6709\u53ef\u7528\u7684\u7cfb\u7edf\u9884\u89c8\u5e94\u7528\u3002" },
-    { "name": "taildrive_status_paths_copied", "value": "\u8fdc\u7a0b\u8def\u5f84\u5df2\u590d\u5236\u3002" },
-    { "name": "taildrive_status_copy_failed", "value": "\u65e0\u6cd5\u590d\u5236\u8fdc\u7a0b\u8def\u5f84\u3002" },
-    { "name": "taildrive_status_share_failed", "value": "\u65e0\u6cd5\u6253\u5f00\u5206\u4eab\u9762\u677f\u3002" },
-    { "name": "taildrive_status_select_one_for_details", "value": "\u8bf7\u9009\u62e9\u4e00\u4e2a\u6587\u4ef6\u4f7f\u7528\u6b64\u64cd\u4f5c\u3002" },
+    { "name": "taildrive_status_preview_download_failed", "value": "\u65e0\u6cd5\u4e0b\u8f7d\u6587\u4ef6\u4ee5\u4fbf\u9884\u89c8" },
+    { "name": "taildrive_status_preview_failed", "value": "\u6ca1\u6709\u53ef\u7528\u7684\u7cfb\u7edf\u9884\u89c8\u5e94\u7528" },
+    { "name": "taildrive_status_paths_copied", "value": "\u8fdc\u7a0b\u8def\u5f84\u5df2\u590d\u5236" },
+    { "name": "taildrive_status_copy_failed", "value": "\u65e0\u6cd5\u590d\u5236\u8fdc\u7a0b\u8def\u5f84" },
+    { "name": "taildrive_status_share_failed", "value": "\u65e0\u6cd5\u6253\u5f00\u5206\u4eab\u9762\u677f" },
+    { "name": "taildrive_status_select_one_for_details", "value": "\u8bf7\u9009\u62e9\u4e00\u4e2a\u6587\u4ef6\u4f7f\u7528\u6b64\u64cd\u4f5c" },
     { "name": "notification_taildrive_uploading_title", "value": "\u6b63\u5728\u4e0a\u4f20\u8fdc\u7a0b\u6587\u4ef6" },
     { "name": "notification_taildrive_downloading_title", "value": "\u6b63\u5728\u4e0b\u8f7d\u8fdc\u7a0b\u6587\u4ef6" },
     { "name": "notification_taildrive_completed_title", "value": "\u8fdc\u7a0b\u6587\u4ef6\u4f20\u8f93\u5b8c\u6210" },
     { "name": "notification_taildrive_failed_title", "value": "\u8fdc\u7a0b\u6587\u4ef6\u4f20\u8f93\u5931\u8d25" },
-    { "name": "transfer_send_interrupted", "value": "网络传输中断，自动续传仍未完成，请重试。" },
+    { "name": "transfer_send_interrupted", "value": "网络传输中断，自动续传仍未完成，请重试" },
     { "name": "transfer_detecting_title", "value": "正在发现可传输设备" },
-    { "name": "transfer_detecting_description", "value": "正在从 VPN 后端读取 Taildrop 能力与设备列表。" },
+    { "name": "transfer_detecting_description", "value": "正在从 VPN 后端读取 Taildrop 能力与设备列表" },
     { "name": "transfer_admin_disabled_title", "value": "Taildrop 尚未启用" },
-    { "name": "transfer_admin_disabled_description", "value": "请在 Tailscale 管理控制台中启用文件发送功能。" },
+    { "name": "transfer_admin_disabled_description", "value": "请在 Tailscale 管理控制台中启用文件发送功能" },
     { "name": "transfer_unavailable_title", "value": "Taildrop 暂时不可用" },
-    { "name": "transfer_unavailable_description", "value": "暂时无法读取可发送设备，请稍后重试。" },
+    { "name": "transfer_unavailable_description", "value": "暂时无法读取可发送设备，请稍后重试" },
     { "name": "transfer_targets_ready_title", "value": "%d 台设备在线" },
-    { "name": "transfer_targets_ready_description", "value": "点击在线设备发送文件，或保存收件箱中的文件。" },
+    { "name": "transfer_targets_ready_description", "value": "点击在线设备发送文件，或保存收件箱中的文件" },
     { "name": "transfer_targets_title", "value": "可发送设备" },
-    { "name": "transfer_no_targets_description", "value": "暂未发现可用于发送文件的设备。" },
+    { "name": "transfer_no_targets_description", "value": "暂未发现可用于发送文件的设备" },
     { "name": "transfer_send_file_action", "value": "发送文件" },
     { "name": "transfer_send_completed", "value": "文件已发送" },
-    { "name": "transfer_send_failed", "value": "文件传输失败，请重试。" },
-    { "name": "transfer_send_target_unavailable", "value": "所选设备当前不可用。" },
-    { "name": "transfer_send_disconnected", "value": "传输完成前 Tailscale 已断开连接。" },
-    { "name": "transfer_send_permission_denied", "value": "无法读取所选文件。" },
-    { "name": "transfer_send_no_space", "value": "存储空间不足，无法准备本次传输。" },
-    { "name": "transfer_send_file_unavailable", "value": "所选文件已不可用。" },
-    { "name": "transfer_send_file_changed", "value": "所选文件在发送前发生变化。" },
-    { "name": "transfer_send_backend_unavailable", "value": "VPN 后端尚未准备好处理本次传输。" },
-    { "name": "transfer_busy_message", "value": "已有传输正在进行。" },
-    { "name": "transfer_file_selection_failed", "value": "无法打开文件选择器。" },
-    { "name": "transfer_file_copy_failed", "value": "无法准备所选文件。" },
+    { "name": "transfer_send_failed", "value": "文件传输失败，请重试" },
+    { "name": "transfer_send_target_unavailable", "value": "所选设备当前不可用" },
+    { "name": "transfer_send_disconnected", "value": "传输完成前 Tailscale 已断开连接" },
+    { "name": "transfer_send_permission_denied", "value": "无法读取所选文件" },
+    { "name": "transfer_send_no_space", "value": "存储空间不足，无法准备本次传输" },
+    { "name": "transfer_send_file_unavailable", "value": "所选文件已不可用" },
+    { "name": "transfer_send_file_changed", "value": "所选文件在发送前发生变化" },
+    { "name": "transfer_send_backend_unavailable", "value": "VPN 后端尚未准备好处理本次传输" },
+    { "name": "transfer_busy_message", "value": "已有传输正在进行" },
+    { "name": "transfer_file_selection_failed", "value": "无法打开文件选择器" },
+    { "name": "transfer_file_copy_failed", "value": "无法准备所选文件" },
     { "name": "transfer_send_action", "value": "发送" },
     { "name": "transfer_source_title", "value": "选择发送内容" },
     { "name": "transfer_source_message", "value": "发送到 %s" },
     { "name": "transfer_method_title", "value": "选择传输方式" },
-    { "name": "transfer_method_message", "value": "选择发送到 %s 的方式。" },
-    { "name": "transfer_method_tailsend_title", "value": "MeshSend" },
-    { "name": "transfer_method_tailsend_description", "value": "内置 Tailscale Taildrop，无需其他应用。" },
-    { "name": "transfer_method_localsend_title", "value": "MeshSend" },
-    { "name": "transfer_method_localsend_description", "value": "LocalSend 生态扩展通道。" },
-    { "name": "transfer_method_remembered", "value": "默认使用上次选择的方式。" },
-    { "name": "transfer_localsend_open_hint", "value": "请打开 LocalSend 继续发送。" },
+    { "name": "transfer_method_message", "value": "选择发送到 %s 的方式" },
+    { "name": "transfer_method_tailsend_title", "value": "Taildrop" },
+    { "name": "transfer_method_tailsend_description", "value": "应用内置Tailrdrop传输" },
+    { "name": "transfer_method_localsend_title", "value": "捷传" },
+    { "name": "transfer_method_localsend_description", "value": "通过捷传向远端 LocalSend 发送文件" },
+    { "name": "transfer_method_remembered", "value": "两种协议都在线时每次都会询问" },
+    { "name": "media_method_title", "value": "媒体播放" },
+    { "name": "media_method_message", "value": "使用 HosPlayer 添加 %s 并播放媒体" },
+    { "name": "media_method_hosplayer_title", "value": "HosPlayer" },
+    { "name": "media_method_hosplayer_description", "value": "使用 HosPlayer 进行服务器添加与媒体播放" },
+    { "name": "transfer_protocol_online", "value": "%s 在线" },
+    { "name": "transfer_protocol_checking", "value": "%s 检测中" },
+    { "name": "transfer_protocol_offline", "value": "%s 离线" },
+    { "name": "transfer_localsend_open_hint", "value": "请打开 LocalSend 继续发送" },
     { "name": "transfer_file_action", "value": "文件" },
     { "name": "transfer_photo_action", "value": "图片与视频" },
     { "name": "transfer_text_action", "value": "文本" },
@@ -168,29 +173,29 @@
     { "name": "transfer_preview_action", "value": "预览" },
     { "name": "transfer_collapse_action", "value": "收起" },
     { "name": "transfer_text_placeholder", "value": "请输入要发送的文字" },
-    { "name": "transfer_cancel_failed", "value": "无法取消本次传输。" },
+    { "name": "transfer_cancel_failed", "value": "无法取消本次传输" },
     { "name": "transfer_cancelling", "value": "正在取消" },
-    { "name": "transfer_send_cancelled", "value": "文件传输已取消。" },
+    { "name": "transfer_send_cancelled", "value": "文件传输已取消" },
     { "name": "transfer_preparing", "value": "正在准备文件" },
     { "name": "transfer_sending_to", "value": "正在发送到 %s" },
     { "name": "transfer_waiting_for_backend", "value": "正在等待 VPN 后端" },
     { "name": "transfer_calculating_speed", "value": "正在计算传输速度" },
     { "name": "transfer_speed_eta", "value": "%s · 剩余 %s" },
-    { "name": "transfer_receive_picker_failed", "value": "无法选择文件保存位置。" },
+    { "name": "transfer_receive_picker_failed", "value": "无法选择文件保存位置" },
     { "name": "transfer_receive_completed", "value": "文件已保存" },
     { "name": "transfer_image_saved", "value": "图片已保存到图库" },
     { "name": "transfer_text_copied", "value": "文本已复制到剪贴板" },
-    { "name": "transfer_receive_unavailable", "value": "收到的文件已不可用。" },
-    { "name": "transfer_receive_no_space", "value": "存储空间不足，无法保存此文件。" },
-    { "name": "transfer_receive_delete_failed", "value": "内容已处理，但无法移除收件箱副本。" },
-    { "name": "transfer_receive_failed", "value": "无法保存收到的文件，请重试。" },
-    { "name": "transfer_save_timeout", "value": "保存超时，可直接重试，无需重启应用。" },
-    { "name": "transfer_receive_cancelled", "value": "已取消保存，可以重新尝试。" },
+    { "name": "transfer_receive_unavailable", "value": "收到的文件已不可用" },
+    { "name": "transfer_receive_no_space", "value": "存储空间不足，无法保存此文件" },
+    { "name": "transfer_receive_delete_failed", "value": "内容已处理，但无法移除收件箱副本" },
+    { "name": "transfer_receive_failed", "value": "无法保存收到的文件，请重试" },
+    { "name": "transfer_save_timeout", "value": "保存超时，可直接重试，无需重启应用" },
+    { "name": "transfer_receive_cancelled", "value": "已取消保存，可以重新尝试" },
     { "name": "transfer_media_ready_to_save", "value": "媒体文件已准备好保存" },
-    { "name": "transfer_media_save_failed", "value": "无法保存到图库，请重试。" },
-    { "name": "transfer_media_save_authorization_failed", "value": "未获得保存到图库的临时授权。" },
-    { "name": "transfer_gallery_failed", "value": "无法将图片保存到图库，请重试。" },
-    { "name": "transfer_text_copy_failed", "value": "无法复制收到的文本，请重试。" },
+    { "name": "transfer_media_save_failed", "value": "无法保存到图库，请重试" },
+    { "name": "transfer_media_save_authorization_failed", "value": "未获得保存到图库的临时授权" },
+    { "name": "transfer_gallery_failed", "value": "无法将图片保存到图库，请重试" },
+    { "name": "transfer_text_copy_failed", "value": "无法复制收到的文本，请重试" },
     { "name": "transfer_content_image", "value": "图片" },
     { "name": "transfer_content_video", "value": "视频" },
     { "name": "transfer_content_text", "value": "文本" },
@@ -199,23 +204,23 @@
     { "name": "transfer_copy_text_action", "value": "复制" },
     { "name": "transfer_discard_action", "value": "丢弃" },
     { "name": "transfer_discard_confirm_title", "value": "丢弃此文件？" },
-    { "name": "transfer_discard_confirm_message", "value": "此操作会从 Taildrop 收件箱中永久移除“%s”。" },
+    { "name": "transfer_discard_confirm_message", "value": "此操作会从 Taildrop 收件箱中永久移除“%s”" },
     { "name": "transfer_discard_completed", "value": "文件已丢弃" },
-    { "name": "transfer_discard_failed", "value": "无法丢弃此文件，请重试。" },
+    { "name": "transfer_discard_failed", "value": "无法丢弃此文件，请重试" },
     { "name": "transfer_retry_action", "value": "重试" },
-    { "name": "transfer_retry_choose_content", "value": "请选择要重新发送的内容。" },
+    { "name": "transfer_retry_choose_content", "value": "请选择要重新发送的内容" },
     { "name": "transfer_sent_status", "value": "已发送" },
     { "name": "transfer_received_status", "value": "已接收" },
     { "name": "transfer_failed_status", "value": "失败" },
     { "name": "transfer_inbox_title", "value": "收到的文件" },
-    { "name": "transfer_inbox_unavailable", "value": "Taildrop 收件箱暂时不可用。" },
-    { "name": "transfer_inbox_empty", "value": "其它设备发送到本机的文件会显示在这里。" },
+    { "name": "transfer_inbox_unavailable", "value": "Taildrop 收件箱暂时不可用" },
+    { "name": "transfer_inbox_empty", "value": "其它设备发送到本机的文件会显示在这里" },
     { "name": "transfer_clear_cache_action", "value": "清除缓存" },
     { "name": "transfer_clear_cache_confirm_title", "value": "清除收到的文件缓存？" },
-    { "name": "transfer_clear_cache_confirm_message", "value": "此操作会永久删除应用私有目录中缓存的全部收到文件。" },
+    { "name": "transfer_clear_cache_confirm_message", "value": "此操作会永久删除应用私有目录中缓存的全部收到文件" },
     { "name": "transfer_clearing_cache", "value": "正在清除收到的文件缓存" },
     { "name": "transfer_cache_cleared", "value": "收到的文件缓存已清除" },
-    { "name": "transfer_clear_cache_failed", "value": "未能清除全部收到的文件缓存，请重试。" },
+    { "name": "transfer_clear_cache_failed", "value": "未能清除全部收到的文件缓存，请重试" },
     { "name": "module_desc", "value": "MeshArc for HarmonyOS NEXT" },
     { "name": "entryability_desc", "value": "MeshArc 鸿蒙主程序" },
     { "name": "entryability_label", "value": "MeshArc" },
@@ -227,46 +232,49 @@
     { "name": "tab_settings", "value": "设置" },
     { "name": "transfer_subtitle", "value": "设备统一展示，需要时再选择传输通道" },
     { "name": "transfer_send_files_title", "value": "发送文件" },
-    { "name": "transfer_send_files_description", "value": "设备列表与 MeshArc 连接状态分离，发送时再选择合适的通道。" },
-    { "name": "transfer_localsend_description", "value": "通过 Tailscale 发现 MeshSend 设备，文件由 LocalSend 服务完成发送。" },
+    { "name": "transfer_localsend_description", "value": "通过 Tailscale 发现 MeshSend 设备，文件由 LocalSend 服务完成发送" },
     { "name": "transfer_localsend_device_count", "value": "已发现 %d 台 MeshSend 设备" },
-    { "name": "transfer_localsend_checking_description", "value": "正在检测 MeshSend 设备。" },
-    { "name": "transfer_localsend_empty_description", "value": "暂未发现可用的 MeshSend 设备。" },
+    { "name": "transfer_localsend_checking_description", "value": "正在检测 MeshSend 设备" },
+    { "name": "transfer_localsend_empty_description", "value": "暂未发现可用的 MeshSend 设备" },
     { "name": "transfer_taildrop_title", "value": "MeshSend" },
     { "name": "transfer_taildrop_description", "value": "使用 Tailscale Taildrop 的 MeshSend 传输文件、图片和文本" },
     { "name": "transfer_connected_title", "value": "可以开始接入传输" },
-    { "name": "transfer_connected_description", "value": "向在线设备发送文件，并保存本机收到的文件。" },
+    { "name": "transfer_connected_description", "value": "向在线设备发送文件，并保存本机收到的文件" },
     { "name": "transfer_connect_first_title", "value": "请先连接 Tailscale" },
-    { "name": "transfer_connect_first_description", "value": "连接 Tailscale 后才能发送与接收；已有的收到文件和传输记录仍可在下方查看。" },
+    { "name": "transfer_connect_first_description", "value": "连接 Tailscale 后才能发送与接收；已有的收到文件和传输记录仍可在下方查看" },
     { "name": "transfer_remote_cached_title", "value": "MeshArc 尚未连接" },
-    { "name": "transfer_remote_cached_description", "value": "已缓存的远程设备仍会显示，发送时再按需恢复连接。" },
+    { "name": "transfer_remote_cached_description", "value": "已缓存的远程设备仍会显示，发送时再按需恢复连接" },
     { "name": "transfer_remote_devices_title", "value": "远程设备" },
-    { "name": "transfer_remote_devices_description", "value": "来自 MeshArc 的设备缓存；发送时优先尝试 LocalSend。" },
+    { "name": "transfer_remote_devices_description", "value": "来自 MeshArc 的设备缓存；发送时优先尝试 LocalSend" },
     { "name": "transfer_remote_cached_badge", "value": "MeshArc" },
     { "name": "transfer_remote_localsend_port", "value": "LocalSend · 端口 %d" },
     { "name": "transfer_remote_port_label", "value": "端口 %d" },
     { "name": "transfer_remote_port_action", "value": "指定端口" },
     { "name": "transfer_remote_port_title", "value": "LocalSend 端口" },
-    { "name": "transfer_remote_port_message", "value": "默认尝试 53317；如果目标设备使用自定义 LocalSend 端口，可以在这里记住。" },
+    { "name": "transfer_remote_port_message", "value": "默认尝试 53317；如果目标设备使用自定义 LocalSend 端口，可以在这里记住" },
     { "name": "transfer_remote_port_placeholder", "value": "53317" },
     { "name": "transfer_remote_port_save", "value": "保存端口" },
-    { "name": "transfer_remote_port_invalid", "value": "请输入 1–65535 范围内的端口。" },
-    { "name": "transfer_remote_port_saved", "value": "已记住此设备的 LocalSend 端口。" },
+    { "name": "transfer_remote_port_invalid", "value": "请输入 1–65535 范围内的端口" },
+    { "name": "transfer_remote_port_saved", "value": "已记住此设备的 LocalSend 端口" },
     { "name": "transfer_remote_waiting_description", "value": "等待 LocalSend 检测" },
+    { "name": "transfer_remote_waiting_connection", "value": "在线 · 等待连接" },
     { "name": "transfer_remote_service_unavailable_description", "value": "上次检测未发现 LocalSend" },
     { "name": "transfer_history_title", "value": "发送记录" },
     { "name": "transfer_clear_history_action", "value": "清除记录" },
     { "name": "transfer_history_cleared", "value": "传输记录已清除" },
-    { "name": "transfer_empty_title", "value": "还没有传输记录" },
-    { "name": "transfer_empty_description", "value": "启用 Taildrop 后，发送和接收的文件会显示在这里。" },
+    { "name": "transfer_empty_title", "value": "还没有发送记录" },
+    { "name": "transfer_empty_description", "value": "启用 Taildrop 后，发送和接收的文件会显示在这里" },
     { "name": "glow_title", "value": "沉浸光感" },
-    { "name": "glow_description", "value": "调整按钮与底栏的光感响应强度。" },
+    { "name": "glow_description", "value": "调整按钮与底栏的光感响应强度" },
     { "name": "glow_exquisite", "value": "精美" },
     { "name": "glow_gentle", "value": "轻柔" },
     { "name": "glow_smooth", "value": "流畅" },
     { "name": "glow_adaptive", "value": "自适应" },
     { "name": "connection_connected", "value": "已连接" },
     { "name": "connection_connecting", "value": "正在连接" },
+    { "name": "device_connection_connecting", "value": "连接中" },
+    { "name": "device_connection_waiting", "value": "在线 · 等待连接" },
+    { "name": "connection_recovering", "value": "连接恢复中" },
     { "name": "connection_problem", "value": "连接遇到问题" },
     { "name": "connection_login_required", "value": "需要登录" },
     { "name": "connection_disconnected", "value": "未连接" },
@@ -277,14 +285,14 @@
     { "name": "description_connecting", "value": "正在建立系统 VPN，请稍候" },
     { "name": "description_login_required", "value": "先在系统浏览器中完成 Tailscale 登录" },
     { "name": "description_problem", "value": "打开工程诊断可查看错误详情" },
-    { "name": "description_tls_problem", "value": "安全控制连接校验失败，请检查系统时间和网络后重试。" },
-    { "name": "description_network_problem", "value": "暂时无法访问 Tailscale 网络，请检查 Wi-Fi 或移动数据后重试。" },
-    { "name": "description_vpn_permission_problem", "value": "系统 VPN 启动失败，请允许 VPN 请求后重新连接。" },
-    { "name": "description_vpn_conflict_problem", "value": "请先在系统中断开其它 VPN，再重新连接。" },
+    { "name": "description_tls_problem", "value": "安全控制连接校验失败，请检查系统时间和网络后重试" },
+    { "name": "description_network_problem", "value": "暂时无法访问 Tailscale 网络，请检查 Wi-Fi 或移动数据后重试" },
+    { "name": "description_vpn_permission_problem", "value": "系统 VPN 启动失败，请允许 VPN 请求后重新连接" },
+    { "name": "description_vpn_conflict_problem", "value": "请先在系统中断开其它 VPN，再重新连接" },
     { "name": "vpn_conflict_title", "value": "请先断开其它 VPN" },
     { "name": "vpn_conflict_message", "value": "请断开其它 VPN 以连接 Tailscale" },
     { "name": "vpn_conflict_confirm_action", "value": "确定" },
-    { "name": "description_status_problem", "value": "暂时无法读取 VPN 状态，请重新打开应用后重试。" },
+    { "name": "description_status_problem", "value": "暂时无法读取 VPN 状态，请重新打开应用后重试" },
     { "name": "description_disconnected", "value": "连接后可通过Tailscale访问其它设备" },
     { "name": "description_starting", "value": "正在准备 Tailscale，请稍候" },
     { "name": "description_approval_required", "value": "请前往 Tailscale 管理控制台批准此设备" },
@@ -302,7 +310,7 @@
     { "name": "exit_node_description", "value": "通过另一台设备访问互联网" },
     { "name": "exit_node_empty", "value": "当前网络没有可用的出口节点" },
     { "name": "exit_node_none", "value": "不使用出口节点" },
-    { "name": "exit_node_login_required", "value": "登录后可查看并选择当前网络的出口节点。" },
+    { "name": "exit_node_login_required", "value": "登录后可查看并选择当前网络的出口节点" },
     { "name": "exit_node_disconnect_first", "value": "断开连接以更改出口节点" },
     { "name": "devices_title", "value": "设备" },
     { "name": "devices_empty", "value": "当前没有其他设备" },
@@ -323,25 +331,25 @@
     { "name": "device_key_expiring", "value": "密钥将在 %d 天后到期" },
     { "name": "local_device_badge", "value": "本机" },
     { "name": "account_title", "value": "账户" },
-    { "name": "account_signed_in", "value": "此设备已登录 Tailscale。" },
-    { "name": "account_signed_out", "value": "登录后可管理此设备并连接你的私有网络。" },
+    { "name": "account_signed_in", "value": "此设备已登录 Tailscale" },
+    { "name": "account_signed_out", "value": "登录后可管理此设备并连接你的私有网络" },
     { "name": "account_profile_unavailable", "value": "登录以使用 Tailscale" },
     { "name": "account_tailnet", "value": "所属网络" },
     { "name": "account_device", "value": "当前设备" },
     { "name": "about_title", "value": "关于" },
     { "name": "welcome_dialog_title", "value": "感谢体验本应用 🎉" },
-    { "name": "welcome_dialog_message", "value": "本应用目前仍处于早期开发阶段，部分功能可能尚未完善，使用过程中可能会遇到异常或兼容性问题。\n\n如果您遇到问题，欢迎通过 设置 > 关于 > 反馈 联系我们，您的建议将帮助应用持续改进。\n\n感谢您的理解与支持！" },
+    { "name": "welcome_dialog_message", "value": "本应用目前仍处于早期开发阶段，部分功能可能尚未完善，使用过程中可能会遇到异常或兼容性问题\n\n如果您遇到问题，欢迎通过 设置 > 关于 > 反馈 联系我们，您的建议将帮助应用持续改进\n\n感谢您的理解与支持！" },
     { "name": "welcome_dialog_action", "value": "我知道了" },
     { "name": "feedback_label", "value": "反馈" },
     { "name": "feedback_open_failed", "value": "无法打开邮件应用" },
     { "name": "app_version_label", "value": "应用版本" },
     { "name": "tailscale_version_label", "value": "Tailscale 内核" },
-    { "name": "logout_description", "value": "退出后，此设备需要重新登录才能连接。" },
-    { "name": "logout_disconnect_first", "value": "请先断开 Tailscale，再退出登录。" },
+    { "name": "logout_description", "value": "退出后，此设备需要重新登录才能连接" },
+    { "name": "logout_disconnect_first", "value": "请先断开 Tailscale，再退出登录" },
     { "name": "logout_action", "value": "退出登录" },
-    { "name": "logout_failed", "value": "退出登录失败，请稍后重试。" },
+    { "name": "logout_failed", "value": "退出登录失败，请稍后重试" },
     { "name": "logout_confirm_title", "value": "退出 Tailscale？" },
-    { "name": "logout_confirm_message", "value": "此设备将从当前 Tailscale 网络注销。以后使用时需要重新登录。" },
+    { "name": "logout_confirm_message", "value": "此设备将从当前 Tailscale 网络注销，以后使用时需要重新登录" },
     { "name": "cancel_action", "value": "取消" },
     { "name": "continue_action", "value": "继续" },
     { "name": "diagnostics_expand", "value": "展开工程诊断" },
@@ -350,10 +358,48 @@
     { "name": "diagnostics_description", "value": "用于排查问题的技术状态" },
     { "name": "diagnostics_unlocked_toast", "value": "工程模式已开启，已定位到工程诊断" },
     { "name": "diagnostic_report_title", "value": "诊断报告" },
-    { "name": "diagnostic_report_description", "value": "生成经过隐私脱敏的 ZIP，包含设备型号、版本、状态摘要、数量、设置及近期结构化事件；不会收集原始日志、身份信息或网络地址。" },
+    { "name": "diagnostic_report_description", "value": "生成经过隐私脱敏的 ZIP，包含所选功能的状态、计数、设置及近期结构化事件；不会收集原始日志、身份信息、网络地址或本地路径" },
     { "name": "diagnostic_report_action", "value": "生成并分享报告" },
     { "name": "diagnostic_report_generating", "value": "正在生成诊断报告…" },
-    { "name": "diagnostic_report_failed", "value": "诊断报告生成或分享失败。" },
+    { "name": "diagnostic_report_failed", "value": "诊断报告生成或分享失败" },
+    { "name": "diagnostic_feature_options_title", "value": "新增功能诊断选项" },
+    { "name": "diagnostic_feature_options_description", "value": "选择要在工程诊断页和脱敏报告中显示的模块；开关变化和自检结果会写入结构化事件与 HiLog" },
+    { "name": "diagnostic_enabled_modules_title", "value": "已启用模块" },
+    { "name": "diagnostic_quick_transfer_option_title", "value": "捷传与 HosPlayer 联动" },
+    { "name": "diagnostic_quick_transfer_option_description", "value": "查看 LocalSend、MeshArc 接收端、媒体服务识别和 HosPlayer 参数协议状态" },
+    { "name": "diagnostic_service_monitoring_option_title", "value": "服务在线状态监测" },
+    { "name": "diagnostic_service_monitoring_option_description", "value": "查看轮询、捷传、媒体、Sunshine 与 Taildrop 的在线状态汇总" },
+    { "name": "diagnostic_security_option_title", "value": "应用锁与安全文件夹" },
+    { "name": "diagnostic_security_option_description", "value": "查看脱敏配置状态，并可触发一次不修改设置的系统身份认证自检" },
+    { "name": "diagnostic_appearance_option_title", "value": "外观与布局" },
+    { "name": "diagnostic_appearance_option_description", "value": "查看背景、沉浸取色、流光等级、主页布局和导航配置摘要" },
+    { "name": "diagnostic_localsend_status_title", "value": "LocalSend / 捷传" },
+    { "name": "diagnostic_mesharc_receiver_status_title", "value": "MeshArc 接收端" },
+    { "name": "diagnostic_hosplayer_status_title", "value": "媒体与 HosPlayer" },
+    { "name": "diagnostic_service_monitoring_title", "value": "服务在线状态监测" },
+    { "name": "diagnostic_service_monitoring_description", "value": "显示脱敏后的在线数量、探测进度与后台轮询状态；状态变化会写入日志" },
+    { "name": "diagnostic_service_polling_status_title", "value": "后台轮询" },
+    { "name": "diagnostic_media_service_status_title", "value": "媒体服务" },
+    { "name": "diagnostic_sunshine_service_status_title", "value": "Sunshine 服务" },
+    { "name": "diagnostic_taildrop_service_status_title", "value": "Taildrop 服务" },
+    { "name": "diagnostic_refresh_feature_services_action", "value": "刷新新增功能服务状态" },
+    { "name": "diagnostic_feature_refresh_status_title", "value": "刷新结果" },
+    { "name": "diagnostic_security_title", "value": "应用安全诊断" },
+    { "name": "diagnostic_security_description", "value": "仅检查应用锁与安全文件夹状态；认证自检不会保存凭据或更改开关" },
+    { "name": "diagnostic_app_lock_status_title", "value": "应用锁" },
+    { "name": "diagnostic_folder_lock_status_title", "value": "安全文件夹" },
+    { "name": "diagnostic_security_self_test_action", "value": "测试系统身份认证" },
+    { "name": "diagnostic_security_self_test_status_title", "value": "身份认证自检" },
+    { "name": "diagnostic_appearance_title", "value": "外观诊断" },
+    { "name": "diagnostic_appearance_description", "value": "只显示外观配置是否启用及数值摘要，不记录背景图片 URI 或文件路径" },
+    { "name": "diagnostic_appearance_background_status_title", "value": "背景效果" },
+    { "name": "diagnostic_appearance_layout_status_title", "value": "布局与导航" },
+    { "name": "diagnostic_device_list_verification_title", "value": "设备列表滚动验证" },
+    { "name": "diagnostic_device_list_verification_description", "value": "复现较长的主页设备列表，验证第 6 台以后的设备仍可滚动到并点击" },
+    { "name": "diagnostic_device_list_fixture_title", "value": "显示 8 台测试设备" },
+    { "name": "diagnostic_device_list_fixture_description", "value": "仅在本次启动临时追加离线测试行，不修改账户或设备数据" },
+    { "name": "diagnostic_device_list_open_action", "value": "打开主页验证" },
+    { "name": "diagnostic_device_list_last_clicked_title", "value": "最近点击的测试设备" },
     { "name": "settings_subtitle", "value": "账户、网络和外观" },
     { "name": "settings_title", "value": "网络设置" },
     { "name": "network_settings_description", "value": "选择此设备使用私有网络的方式" },
@@ -362,36 +408,36 @@
     { "name": "setting_exit_node", "value": "出口节点" },
     { "name": "setting_exit_node_lan", "value": "使用出口节点时允许访问局域网" },
     { "name": "setting_exit_node_lan_description", "value": "使用出口节点时仍可访问附近设备" },
-    { "name": "network_settings_disconnect_first", "value": "断开连接后可更改网络设置。" },
-    { "name": "network_setting_failed", "value": "设置未能保存，请重试。" },
+    { "name": "network_settings_disconnect_first", "value": "断开连接后可更改网络设置" },
+    { "name": "network_setting_failed", "value": "设置未能保存，请重试" },
     { "name": "setting_enabled", "value": "已开启" },
     { "name": "setting_disabled", "value": "已关闭" },
     { "name": "setting_unavailable", "value": "暂不可用" },
     { "name": "control_server_title", "value": "后端服务器" },
-    { "name": "control_server_description", "value": "填入后端服务器地址以继续。若不知道这是什么，请使用默认地址。确认前应用不会联网。" },
+    { "name": "control_server_description", "value": "填入后端服务器地址以继续，若不知道这是什么，请使用默认地址，确认前应用不会联网" },
     { "name": "control_server_confirmed", "value": "已确认" },
     { "name": "control_server_not_confirmed", "value": "未确认" },
     { "name": "control_server_save", "value": "确认后端服务器" },
     { "name": "control_server_http_risk_title", "value": "HTTP 后端连接风险" },
-    { "name": "control_server_http_risk_message", "value": "该地址使用未加密的 HTTP。登录和连接流量可能被网络读取或篡改。只有在信任此网络和服务器时才保存。" },
+    { "name": "control_server_http_risk_message", "value": "该地址使用未加密的 HTTP，登录和连接流量可能被网络读取或篡改，只有在信任此网络和服务器时才保存" },
     { "name": "control_server_http_risk_cancel", "value": "取消" },
     { "name": "control_server_http_risk_confirm", "value": "仍然保存 HTTP 后端" },
-    { "name": "control_server_saved", "value": "后端服务器已保存，现在可以登录。" },
-    { "name": "control_server_invalid", "value": "请输入有效的 HTTP 或 HTTPS 控制服务器地址，且不要包含查询参数。" },
-    { "name": "control_server_save_failed", "value": "控制服务器保存失败，请重试。" },
-    { "name": "control_server_disconnect_first", "value": "请先断开连接，再更改后端服务器。" },
+    { "name": "control_server_saved", "value": "后端服务器已保存，现在可以登录" },
+    { "name": "control_server_invalid", "value": "请输入有效的 HTTP 或 HTTPS 控制服务器地址，且不要包含查询参数" },
+    { "name": "control_server_save_failed", "value": "控制服务器保存失败，请重试" },
+    { "name": "control_server_disconnect_first", "value": "请先断开连接，再更改后端服务器" },
     { "name": "control_server_guide_title", "value": "选择控制服务器" },
-    { "name": "control_server_guide_message", "value": "在你确认地址之前，Tailscale OHOS 不会连接任何服务器。设置页已预填 Tailscale 官方地址，你也可以填写自建 Headscale 地址。" },
+    { "name": "control_server_guide_message", "value": "在你确认地址之前，Tailscale OHOS 不会连接任何服务器，设置页已预填 Tailscale 官方地址，你也可以填写自建 Headscale 地址" },
     { "name": "control_server_later", "value": "稍后" },
     { "name": "control_server_configure", "value": "现在配置" },
-    { "name": "control_server_required_to_connect", "value": "请先在账户设置中确认后端服务器。" },
+    { "name": "control_server_required_to_connect", "value": "请先在账户设置中确认后端服务器" },
     { "name": "connection_server_required", "value": "需要配置后端服务器" },
-    { "name": "description_server_required", "value": "选择并确认后端服务器后，Tailscale 才会启动。" },
+    { "name": "description_server_required", "value": "选择并确认后端服务器后，Tailscale 才会启动" },
     { "name": "control_server_first_run_tip", "value": "请先填写后端服务器地址并登录" },
-    { "name": "diagnostic_first_run_tools_description", "value": "用于测试首次使用流程和系统 VPN 意外断开的工程操作。每次操作都会写入诊断事件日志。" },
+    { "name": "diagnostic_first_run_tools_description", "value": "用于测试首次使用流程和系统 VPN 意外断开的工程操作，每次操作都会写入诊断事件日志" },
     { "name": "diagnostic_reset_first_run_action", "value": "清除数据并模拟首次打开" },
     { "name": "diagnostic_reset_first_run_confirm_title", "value": "模拟首次打开应用？" },
-    { "name": "diagnostic_reset_first_run_confirm_message", "value": "将清除已确认的后端服务器和本地 Tailscale 账户状态，然后回到首次使用引导。" },
+    { "name": "diagnostic_reset_first_run_confirm_message", "value": "将清除已确认的后端服务器和本地 Tailscale 账户状态，然后回到首次使用引导" },
     { "name": "diagnostic_reset_first_run_completed", "value": "已恢复首次使用状态" },
     { "name": "diagnostic_reset_first_run_failed", "value": "未能完整清除首次使用数据" },
     { "name": "diagnostic_force_vpn_stop_action", "value": "手动切断系统 VPN 连接" },
@@ -399,22 +445,22 @@
     { "name": "diagnostic_force_vpn_stop_failed", "value": "未能切断系统 VPN" },
     { "name": "diagnostic_simulate_crash_action", "value": "模拟应用闪退" },
     { "name": "diagnostic_simulate_crash_confirm_title", "value": "模拟应用闪退？" },
-    { "name": "diagnostic_simulate_crash_confirm_message", "value": "此工程测试会停止系统 VPN、保留一份新鲜的“已连接”状态快照，然后异常终止应用。重新打开后，应用应短暂核验这份旧状态，并在约 2.5 秒内显示“未连接”。" },
+    { "name": "diagnostic_simulate_crash_confirm_message", "value": "此工程测试会停止系统 VPN、保留一份新鲜的“已连接”状态快照，然后异常终止应用，重新打开后，应用应短暂核验这份旧状态，并在约 2.5 秒内显示“未连接”" },
     { "name": "diagnostic_simulate_crash_failed", "value": "未能准备闪退模拟" },
     { "name": "diagnostic_action_status", "value": "工程操作" },
     { "name": "diagnostic_probe_title", "value": "诊断检查" },
-    { "name": "diagnostic_probe_description", "value": "检查应用和控制面状态，不会修改数据。" },
+    { "name": "diagnostic_probe_description", "value": "检查应用和控制面状态，不会修改数据" },
     { "name": "diagnostic_refresh_status_action", "value": "刷新状态" },
     { "name": "diagnostic_probe_engine_action", "value": "检查引擎" },
     { "name": "diagnostic_probe_control_tls_action", "value": "检查控制面 TLS" },
     { "name": "diagnostic_control_plane_status_title", "value": "控制面" },
     { "name": "diagnostic_vpn_extension_status_title", "value": "VPN 扩展" },
     { "name": "diagnostic_dangerous_title", "value": "危险操作" },
-    { "name": "diagnostic_dangerous_description", "value": "以下操作可能清除数据、停止服务或模拟故障，请确认影响后再执行。" },
+    { "name": "diagnostic_dangerous_description", "value": "以下操作可能清除数据、停止服务或模拟故障，请确认影响后再执行" },
     { "name": "diagnostic_fake_media_online_title", "value": "伪装媒体服务在线" },
-    { "name": "diagnostic_fake_media_online_description", "value": "仅本次启动临时将 Jellyfin 显示为可用。" },
+    { "name": "diagnostic_fake_media_online_description", "value": "仅本次启动临时将 Jellyfin 显示为可用" },
     { "name": "diagnostic_media_integration_title", "value": "媒体服务联动验证" },
-    { "name": "diagnostic_media_integration_description", "value": "使用内置样本验证 Jellyfin、Emby、Plex 和 HosPlayer 联动。" },
+    { "name": "diagnostic_media_integration_description", "value": "检查捷传接收链路、媒体服务识别，并使用内置样本验证 Jellyfin、Emby、Plex 与 HosPlayer 参数联动" },
     { "name": "diagnostic_media_self_test_action", "value": "运行媒体服务离线自检" },
     { "name": "diagnostic_hosplayer_copy_action", "value": "复制 HosPlayer 导入链接" },
     { "name": "diagnostic_media_self_test_status", "value": "媒体联动自检" },
@@ -424,12 +470,14 @@
     { "name": "settings_cache_description", "value": "（7天后自动清理）" },
     { "name": "settings_cache_calculating", "value": "正在计算" },
     { "name": "settings_cache_clearing", "value": "正在清除" },
-    { "name": "settings_clear_cache_action", "value": "清除缓存" },
-    { "name": "settings_clear_cache_confirm_title", "value": "清除应用缓存？" },
-    { "name": "settings_clear_cache_confirm_message", "value": "将删除应用生成的临时文件和待接收文件，不会影响账户、连接设置或传输记录。" },
-    { "name": "settings_clear_cache_busy", "value": "当前有任务正在使用缓存，请稍后再试。" },
+    { "name": "settings_clear_cache_action", "value": "清理所有本地文件" },
+    { "name": "settings_clear_cache_confirm_title", "value": "清理所有本地文件？" },
+    { "name": "settings_clear_cache_confirm_message", "value": "将删除预览缓存和应用私有目录中已收到的文件，不会影响账户、连接设置或发送记录" },
+    { "name": "settings_clear_cache_busy", "value": "当前有任务正在使用缓存，请稍后再试" },
     { "name": "settings_cache_cleared", "value": "缓存已清除" },
-    { "name": "settings_clear_cache_failed", "value": "部分缓存未能清除，请稍后重试。" }
+    { "name": "settings_all_local_files_cleared", "value": "所有本地文件已清理" },
+    { "name": "settings_clear_cache_failed", "value": "部分缓存未能清除，请稍后重试" },
+    { "name": "settings_all_local_files_clear_failed", "value": "部分本地文件未能清理，请稍后重试" }
     ,{ "name": "notification_taildrop_receiving_title", "value": "\u6b63\u5728\u63a5\u6536\u6587\u4ef6" }
     ,{ "name": "notification_taildrop_receiving_indeterminate", "value": "\u6b63\u5728\u63a5\u6536" }
     ,{ "name": "notification_taildrop_received_title", "value": "\u5df2\u63a5\u6536\u6587\u4ef6" }
@@ -446,10 +494,12 @@
     ,{ "name": "localsend_unavailable", "value": "暂未发现 MeshSend" }
     ,{ "name": "device_probe_checking", "value": "\u6b63\u5728\u68c0\u6d4b" }
     ,{ "name": "device_path_direct", "value": "\u76f4\u8fde · %d ms" }
+    ,{ "name": "device_path_relay", "value": "\u4e2d\u7ee7 · %d ms" }
     ,{ "name": "device_path_peer_relay", "value": "\u70b9\u5bf9\u70b9\u4e2d\u7ee7 · %d ms" }
     ,{ "name": "device_path_derp_relay", "value": "DERP \u4e2d\u7ee7 · %d ms" }
     ,{ "name": "device_path_unreachable", "value": "\u5f53\u524d\u4e0d\u53ef\u8fbe" }
     ,{ "name": "device_status_unknown", "value": "\u5c1a\u672a\u786e\u8ba4" }
+    ,{ "name": "device_detail_service_unavailable", "value": "\u4e0d\u53ef\u7528" }
     ,{ "name": "streaming_label", "value": "\u8fdc\u7a0b\u4e32\u6d41" }
     ,{ "name": "sunshine_available", "value": "Sunshine \u53ef\u7528" }
     ,{ "name": "sunshine_checking", "value": "Sunshine \u68c0\u6d4b\u4e2d" }
@@ -480,7 +530,7 @@
     ,{ "name": "device_detail_taildrop_connect", "value": "连接 Tailscale 后即可开始 MeshSend 传输" }
     ,{ "name": "device_detail_services_checking", "value": "正在检查可用服务…" }
     ,{ "name": "device_detail_services_empty", "value": "暂未发现可直接打开的服务" }
-    ,{ "name": "device_detail_services_offline", "value": "设备当前离线，仍可在下方查看网络信息。" }
+    ,{ "name": "device_detail_services_offline", "value": "设备当前离线，仍可在下方查看网络信息" }
     ,{ "name": "device_detail_network_title", "value": "网络" }
     ,{ "name": "device_detail_exit_node_available", "value": "可用" }
     ,{ "name": "device_detail_device_title", "value": "设备信息" }
@@ -489,10 +539,11 @@
     ,{ "name": "network_sheet_title", "value": "网络" }
     ,{ "name": "network_sheet_network_title", "value": "Tailscale 网络" }
     ,{ "name": "network_sheet_device_label", "value": "当前设备" }
-    ,{ "name": "network_sheet_local_address", "value": "本机地址" }
+    ,{ "name": "network_sheet_local_address", "value": "设备IP" }
     ,{ "name": "network_sheet_not_used", "value": "未使用" }
+    ,{ "name": "network_sheet_not_used_available", "value": "未使用 · %d 可用" }
     ,{ "name": "network_sheet_tailnet_default", "value": "Tailnet 默认" }
-    ,{ "name": "network_sheet_lan_access", "value": "允许访问局域网" }
+    ,{ "name": "network_sheet_lan_access", "value": "局域网访问" }
     ,{ "name": "network_sheet_on", "value": "开启" }
     ,{ "name": "network_sheet_off", "value": "关闭" }
     ,{ "name": "network_sheet_traffic_title", "value": "流量" }
@@ -500,16 +551,26 @@
     ,{ "name": "network_sheet_current_rate", "value": "当前速率" }
     ,{ "name": "network_sheet_session_traffic", "value": "本次连接" }
     ,{ "name": "update_changelog_title", "value": "\u66f4\u65b0\u65e5\u5fd7" }
-    ,{ "name": "update_changelog_dont_show", "value": "\u4e0d\u518d\u663e\u793a" }
+    ,{ "name": "update_changelog_only_on_update", "value": "\u4ec5\u66f4\u65b0\u65f6\u663e\u793a" }
     ,{ "name": "update_changelog_section", "value": "\u672c\u6b21\u66f4\u65b0" }
     ,{ "name": "navigation_settings_title", "value": "\u5e95\u90e8\u5bfc\u822a\u680f" }
-    ,{ "name": "navigation_settings_description", "value": "\u9009\u62e9\u663e\u793a\u54ea\u4e9b\u6807\u7b7e\uff0c\u5e76\u8c03\u6574\u663e\u793a\u987a\u5e8f\u3002" }
+    ,{ "name": "navigation_settings_description", "value": "\u9009\u62e9\u663e\u793a\u54ea\u4e9b\u6807\u7b7e\uff0c\u5e76\u8c03\u6574\u663e\u793a\u987a\u5e8f" }
     ,{ "name": "navigation_position_title", "value": "\u5bfc\u822a\u680f\u4f4d\u7f6e" }
-    ,{ "name": "navigation_position_description", "value": "\u4e0a\u4e0b\u62d6\u52a8\u8c03\u6574\u6d6e\u52a8\u5bfc\u822a\u680f\u7684\u9ad8\u5ea6\u3002" }
-    ,{ "name": "navigation_always_one_visible", "value": "\u81f3\u5c11\u4fdd\u7559\u4e00\u4e2a\u53ef\u89c1\u6807\u7b7e\u3002" }
+    ,{ "name": "navigation_position_description", "value": "\u4e0a\u4e0b\u62d6\u52a8\u8c03\u6574\u6d6e\u52a8\u5bfc\u822a\u680f\u7684\u9ad8\u5ea6" }
+    ,{ "name": "navigation_always_one_visible", "value": "\u81f3\u5c11\u4fdd\u7559\u4e00\u4e2a\u53ef\u89c1\u6807\u7b7e" }
     ,{ "name": "navigation_move_up", "value": "\u4e0a\u79fb\u6807\u7b7e" }
     ,{ "name": "navigation_move_down", "value": "\u4e0b\u79fb\u6807\u7b7e" }
+    ,{ "name": "settings_network_connection_title", "value": "\u7f51\u7edc\u4e0e\u8fde\u63a5" }
+    ,{ "name": "settings_network_preferences_title", "value": "\u8fde\u63a5\u504f\u597d" }
+    ,{ "name": "settings_appearance_navigation_title", "value": "\u5916\u89c2\u4e0e\u5bfc\u822a" }
+    ,{ "name": "settings_storage_cache_title", "value": "\u5b58\u50a8\u4e0e\u7f13\u5b58" }
+    ,{ "name": "settings_about_help_title", "value": "\u5173\u4e8e\u4e0e\u5e2e\u52a9" }
+    ,{ "name": "settings_animation_summary", "value": "\u65f6\u957f\u3001\u5e45\u5ea6\u4e0e\u5f39\u6027\u54cd\u5e94" }
     ,{ "name": "native_settings_title", "value": "\u8bbe\u7f6e" }
+    ,{ "name": "native_settings_profile_default", "value": "MeshArc" }
+    ,{ "name": "native_settings_vip", "value": "MeshArc VIP" }
+    ,{ "name": "native_settings_vip_action", "value": "\u89e3\u9501\u66f4\u591a\u80fd\u529b" }
+    ,{ "name": "native_settings_system_follow", "value": "\u8ddf\u968f\u7cfb\u7edf" }
     ,{ "name": "native_settings_transfer_section", "value": "\u4e92\u4f20\u4e0e\u7a7a\u95f4" }
     ,{ "name": "native_settings_appearance_section", "value": "\u5916\u89c2\u4e0e\u4e2a\u6027\u5316" }
     ,{ "name": "native_settings_help_section", "value": "\u5173\u4e8e\u4e0e\u5e2e\u52a9" }
@@ -519,7 +580,10 @@
     ,{ "name": "native_settings_storage_app_data", "value": "\u5e94\u7528\u914d\u7f6e\u4e0e\u6570\u636e" }
     ,{ "name": "native_settings_storage_received", "value": "\u5df2\u63a5\u6536\u6587\u4ef6\u4e0e\u5a92\u4f53" }
     ,{ "name": "native_settings_storage_temporary", "value": "\u4e34\u65f6\u4f20\u8f93\u4e0e\u9884\u89c8\u7f13\u5b58" }
-    ,{ "name": "native_settings_storage_clear", "value": "\u6df1\u5ea6\u6e05\u7406\u4e34\u65f6\u7f13\u5b58\u4e0e\u7f29\u7565\u56fe" }
+    ,{ "name": "native_settings_storage_clear_cache", "value": "\u6e05\u9664\u7f13\u5b58" }
+    ,{ "name": "native_settings_storage_clear_cache_description", "value": "\u4ec5\u6e05\u9664\u7f29\u7565\u56fe\u548c\u9884\u89c8\u7f13\u5b58\uff0c\u7f13\u5b58\u5c06\u57287\u5929\u540e\u81ea\u52a8\u6e05\u7406" }
+    ,{ "name": "native_settings_storage_clear", "value": "\u6e05\u7406\u6240\u6709\u672c\u5730\u6587\u4ef6" }
+    ,{ "name": "native_settings_storage_clear_description", "value": "\u6e05\u7406\u9884\u89c8\u7f13\u5b58\u4ee5\u53ca\u5e94\u7528\u79c1\u6709\u76ee\u5f55\u4e2d\u5df2\u6536\u5230\u7684\u6587\u4ef6" }
     ,{ "name": "native_settings_storage_clear_action", "value": "\u6e05\u7406" }
     ,{ "name": "native_settings_theme", "value": "\u4e3b\u9898\u8272\u548c\u98ce\u683c" }
     ,{ "name": "native_settings_color_mode", "value": "\u989c\u8272\u6a21\u5f0f" }
@@ -527,9 +591,10 @@
     ,{ "name": "native_settings_animation", "value": "\u52a8\u753b\u6548\u679c" }
     ,{ "name": "native_settings_usage", "value": "\u4f7f\u7528\u8bf4\u660e" }
     ,{ "name": "native_settings_choose_background", "value": "\u9009\u62e9\u80cc\u666f\u56fe\u7247" }
+    ,{ "name": "native_settings_clear_background", "value": "\u6e05\u7a7a\u80cc\u666f\u56fe\u7247" }
     ,{ "name": "native_settings_choose_background_desc", "value": "\u4ece\u76f8\u518c\u9009\u62e9\u4e00\u5f20\u56fe\u7247" }
     ,{ "name": "native_settings_immersive_color", "value": "\u6c89\u6d78\u8272\u5f69\u80cc\u666f" }
-    ,{ "name": "native_settings_immersive_color_desc", "value": "\u6839\u636e\u5f53\u524d\u5f85\u529e\u5355\u72b6\u6001\u5207\u6362\u80cc\u666f\u8272\uff0c\u66f4\u5177\u6c89\u6d78\u611f" }
+    ,{ "name": "native_settings_immersive_color_desc", "value": "\u6839\u636e\u8fde\u63a5\u4e0e\u4f20\u8f93\u72b6\u6001\u53e0\u52a0\u73af\u5883\u8272\uff0c\u4e00\u773c\u611f\u77e5\u5f53\u524d\u72b6\u6001" }
     ,{ "name": "native_settings_immersive_light", "value": "\u6c89\u6d78\u5149\u611f" }
     ,{ "name": "native_settings_immersive_light_desc", "value": "\u4f53\u9a8c HarmonyOS Design \u7684\u6700\u65b0\u6750\u8d28\u5149\u611f\uff08\u4f1a\u589e\u52a0\u529f\u8017\u4e14\u5bb9\u6613\u6389\u5e27\uff09" }
     ,{ "name": "native_settings_material", "value": "\u6c89\u6d78\u5149\u611f\u6750\u8d28" }
@@ -554,5 +619,32 @@
     ,{ "name": "native_settings_preview_hint", "value": "\u70b9\u51fb\u9884\u89c8\u64ad\u653e\u5c5e\u6027\u52a8\u753b" }
     ,{ "name": "native_settings_close", "value": "\u5173\u95ed\u8bbe\u7f6e" }
     ,{ "name": "native_settings_back", "value": "\u8fd4\u56de" }
+    ,{ "name": "transfer_protocol_refresh_action", "value": "\u5237\u65b0" }
+    ,{ "name": "transfer_protocol_refreshing", "value": "\u5237\u65b0\u4e2d" }
+    ,{ "name": "transfer_tailscale_network_not_connected", "value": "Tailscale\u7f51\u7edc\u672a\u8fde\u63a5" }
+    ,{ "name": "transfer_localsend_open_failed", "value": "LocalSend \u672a\u5b89\u88c5\u6216\u65e0\u6cd5\u6253\u5f00" }
+    ,{ "name": "device_detail_service_available", "value": "\u53ef\u7528" }
+    ,{ "name": "device_detail_device_offline", "value": "\u8bbe\u5907\u79bb\u7ebf" }
+    ,{ "name": "device_detail_media_discovered", "value": "\u5df2\u53d1\u73b0\uff1a%s" }
+    ,{ "name": "device_detail_remote_files_title", "value": "\u8fdc\u7a0b\u6587\u4ef6\u7ba1\u7406" }
+    ,{ "name": "transfer_multi_protocol_subtitle", "value": "\u901a\u8fc7\u591a\u534f\u8bae\u6536\u53d1\u6587\u4ef6" }
+    ,{ "name": "device_detail_remote_desktop_title", "value": "\u8fdc\u7a0b\u684c\u9762" }
+    ,{ "name": "account_open_details", "value": "\u6253\u5f00\u8d26\u6237\u8be6\u7ec6\u4fe1\u606f" }
+    ,{ "name": "settings_security_title", "value": "\u5b89\u5168" }
+    ,{ "name": "security_app_lock_title", "value": "\u5e94\u7528\u9501" }
+    ,{ "name": "security_app_lock_description", "value": "\u6bcf\u6b21\u8fd4\u56de\u524d\u53f0\u65f6\u9700\u8981\u901a\u8fc7\u8bbe\u5907\u8eab\u4efd\u9a8c\u8bc1" }
+    ,{ "name": "security_folder_lock_title", "value": "\u6587\u4ef6\u5939\u9501" }
+    ,{ "name": "security_folder_lock_description", "value": "\u53ef\u9501\u5b9a\u9009\u5b9a\u8bbe\u5907\u6587\u4ef6\u5939\u53ca\u5176\u5185\u5bb9" }
+    ,{ "name": "security_lock_folder_action", "value": "\u9501\u5b9a\u6587\u4ef6\u5939" }
+    ,{ "name": "security_unlock_folder_action", "value": "\u89e3\u9664\u6587\u4ef6\u5939\u9501\u5b9a" }
+    ,{ "name": "security_app_authentication_title", "value": "\u89e3\u9501 MeshArc" }
+    ,{ "name": "security_folder_authentication_title", "value": "\u89e3\u9501\u53d7\u4fdd\u62a4\u6587\u4ef6\u5939" }
+    ,{ "name": "security_app_locked_title", "value": "\u5e94\u7528\u5df2\u9501\u5b9a" }
+    ,{ "name": "security_app_locked_description", "value": "\u8bf7\u4f7f\u7528\u8bbe\u5907\u8eab\u4efd\u9a8c\u8bc1\u540e\u7ee7\u7eed" }
+    ,{ "name": "security_unlock_app_action", "value": "\u89e3\u9501" }
+    ,{ "name": "security_authentication_failed", "value": "\u8eab\u4efd\u9a8c\u8bc1\u672a\u5b8c\u6210\uff0c\u8bf7\u91cd\u8bd5" }
+    ,{ "name": "security_settings_authentication_title", "value": "\u9a8c\u8bc1\u5b89\u5168\u8bbe\u7f6e" }
+    ,{ "name": "security_settings_save_failed", "value": "\u65e0\u6cd5\u4fdd\u5b58\u5b89\u5168\u8bbe\u7f6e\uff0c\u8bf7\u91cd\u8bd5" }
+    ,{ "name": "notification_vpn_background_title", "value": "VPN 已连接" }
   ]
 }

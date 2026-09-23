@@ -20,19 +20,61 @@ export interface ReleaseChangelogDefinition {
 
 export const RELEASE_CHANGELOG_ENTRIES: ReleaseChangelogDefinition[] = [
   {
-    versionName: '0.9.10',
-    versionCode: 99000003,
-    releaseDateZh: '2026年8月10日',
-    releaseDateEn: 'August 10, 2026',
+    versionName: '1.1.0',
+    versionCode: 100000003,
+    releaseDateZh: '2026年9月23日',
+    releaseDateEn: 'September 23, 2026',
     changesZh: [
-      '新增更新后首次打开时显示的半模态更新日志',
-      '更新 HosPlayer 服务器导入链接',
-      '修复连接、传输和媒体联动中的若干边界问题'
+      '新增 VPN 连接后的持续后台任务与流量通知，显示本次连接的真实上传和下载总量',
+      '改进后台连接恢复：短暂状态读取异常不再立即停止保护任务；系统取消后延迟重试，用户主动关闭后尊重其选择',
+      '优化连接状态更新，避免设备探测阻塞心跳，减少可选服务查询失败导致的错误断开提示',
+      '修复主页设备列表过长时无法滚动到底的问题，优化设备详情半模态滚动与底部导航手势',
+      '修复更新日志面板关闭及显示偏好操作，并优化底部导航的图标、文字和渐变遮罩'
     ],
     changesEn: [
-      'Added a half-modal release log on the first launch after an update',
-      'Updated the HosPlayer server import handoff',
-      'Fixed several connection, transfer, and media integration edge cases'
+      'Added a continuous background task and VPN traffic notification showing real upload and download totals for the current connection',
+      'Improved background recovery: tolerate brief status-read failures, back off retries after system cancellation, and respect explicit user dismissal',
+      'Start connection heartbeats before peer probes and avoid false disconnect reports when optional service snapshots fail',
+      'Fixed scrolling to the end of long Home device lists and refined device-detail sheet scrolling and bottom-navigation gestures',
+      'Fixed release-note dismissal and display-preference actions, and refined bottom-navigation icons, labels and gradient masking'
+    ]
+  },
+  {
+    versionName: '1.0.1',
+    versionCode: 100000002,
+    releaseDateZh: '2026年8月25日',
+    releaseDateEn: 'August 25, 2026',
+    changesZh: [
+      '修复主页设备列表过长时无法滚动到底的问题'
+    ],
+    changesEn: [
+      'Fixed an issue that prevented the Home device list from scrolling to the bottom when it was long'
+    ]
+  },
+  {
+    versionName: '1.0.0',
+    versionCode: 100000000,
+    releaseDateZh: '2026年8月19日',
+    releaseDateEn: 'August 19, 2026',
+    changesZh: [
+      '合作联动：MeshArc设备卡片→媒体→点击跳转到HosPlayer；需在远程媒体服务器上安装并配置Tailscale',
+      '新增应用锁：每次应用返回前台时通过系统身份验证解锁，支持设备已启用的人脸、指纹或 PIN；仅保存开关策略，不保存任何身份凭据或认证令牌',
+      '新增文件夹锁：可在 Taildrive 中锁定指定远程文件夹及其全部子内容，访问受保护目录和调整锁定规则时均需系统身份验证；重命名、移动或删除文件夹后会同步更新锁定规则',
+      '新增安全设置与诊断：集中查看应用锁、文件夹锁和受保护文件夹数量，并可运行不修改设置的系统身份验证自检',
+      '优化设置界面：保留账户卡片，按网络、外观、存储、关于和安全分类进入二级页面；统一页面标题、材质和连续滚动的半模态交互',
+      '优化外观与动效：支持背景图片、沉浸色彩和材质效果；动画预设、时长、幅度与阻尼可预览并自动保存到本地偏好',
+      '优化存储与更新日志：新增本地数据、已接收文件和临时缓存的环形占用统计；更新日志支持按版本横向浏览，最新合作图展示在详细内容顶部',
+      '更新 HosPlayer 服务器导入链接，并修复连接、传输和媒体联动中的若干边界问题'
+    ],
+    changesEn: [
+      'Partnership integration: MeshArc device card → Media → tap to open HosPlayer; install and configure Tailscale on the remote media server',
+      'Added App Lock: each return to the foreground requires system authentication using enrolled face, fingerprint, or PIN; only the lock policy is stored, never credentials or authentication tokens',
+      'Added Folder Lock: protect a selected Taildrive remote folder and all of its contents; opening protected folders or changing their lock policy requires system authentication, and lock rules follow folder rename, move, and delete operations',
+      'Added Security settings and diagnostics: view App Lock, Folder Lock, and protected-folder counts together, then run a system-authentication self-test without changing settings',
+      'Polished Settings: retain the account card and organize Network, Appearance, Storage, About, and Security into second-level pages with consistent titles, material, and continuously scrolling bottom sheets',
+      'Polished appearance and motion: choose a background image, immersive color, and material effects, then preview and persist animation presets, duration, amplitude, and damping',
+      'Polished storage and release notes: added a ring summary for app data, received files, and temporary cache; release notes now browse by version horizontally and show the latest partnership image above the details',
+      'Updated the HosPlayer server import handoff and fixed several connection, transfer, and media integration edge cases'
     ]
   },
   {

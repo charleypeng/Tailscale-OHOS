@@ -18,7 +18,6 @@ local.properties
 AGENTS.md
 .agents/
 .codex/
-.workbuddy/
 *.hap
 *.app
 
@@ -29,8 +28,3 @@ certs/release/*.jks
 certs/release/*.keystore
 certs/release/*.key
 certs/release/*.p7b
-
-#macos
-.DS_Store
-*.swp
-.Trash/

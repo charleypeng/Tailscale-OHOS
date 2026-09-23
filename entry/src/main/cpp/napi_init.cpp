@@ -17,6 +17,7 @@ struct AsyncStringWork {
 };
 
 enum class AsyncInputOperation {
+    NetworkChanged,
     SetExitNode,
     SetNetworkSetting,
     PeerConnectivity,
@@ -28,6 +29,7 @@ enum class AsyncInputOperation {
     TaildriveStat,
     TaildriveMutate,
     TaildriveDownload,
+    TaildriveManualDownload,
     TaildriveUpload
 };
 
@@ -102,7 +104,9 @@ void ExecuteAsyncInput(napi_env env, void* data)
     (void)env;
     auto* work = static_cast<AsyncInputWork*>(data);
     char* message = nullptr;
-    if (work->operation == AsyncInputOperation::SetExitNode) {
+    if (work->operation == AsyncInputOperation::NetworkChanged) {
+        message = TSBackendNetworkChanged(const_cast<char*>(work->input.c_str()));
+    } else if (work->operation == AsyncInputOperation::SetExitNode) {
         message = TSBackendSetExitNode(const_cast<char*>(work->input.c_str()));
     } else if (work->operation == AsyncInputOperation::SetNetworkSetting) {
         message = TSBackendSetNetworkSetting(const_cast<char*>(work->input.c_str()), work->enabled ? 1 : 0);
@@ -124,6 +128,8 @@ void ExecuteAsyncInput(napi_env env, void* data)
         message = TSBackendTaildriveMutate(const_cast<char*>(work->input.c_str()));
     } else if (work->operation == AsyncInputOperation::TaildriveDownload) {
         message = TSBackendTaildriveDownload(const_cast<char*>(work->input.c_str()));
+    } else if (work->operation == AsyncInputOperation::TaildriveManualDownload) {
+        message = TSBackendTaildriveManualDownload(const_cast<char*>(work->input.c_str()));
     } else {
         message = TSBackendTaildriveUpload(const_cast<char*>(work->input.c_str()));
     }
@@ -247,6 +253,25 @@ napi_value BackendPeerConnectivityAsync(napi_env env, napi_callback_info info)
     }
     return CreateAsyncInputPromise(
         env, AsyncInputOperation::PeerConnectivity, key.data(), false, "TailscaleBackendPeerConnectivity");
+}
+
+napi_value BackendNetworkChangedAsync(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    size_t length = 0;
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok || argc != 1 ||
+        napi_get_value_string_utf8(env, args[0], nullptr, 0, &length) != napi_ok || length > 64) {
+        napi_throw_type_error(env, nullptr, "backendNetworkChangedAsync requires an interface name");
+        return nullptr;
+    }
+    std::vector<char> name(length + 1, '\0');
+    if (napi_get_value_string_utf8(env, args[0], name.data(), name.size(), &length) != napi_ok) {
+        napi_throw_error(env, nullptr, "Failed to read the interface name");
+        return nullptr;
+    }
+    return CreateAsyncInputPromise(
+        env, AsyncInputOperation::NetworkChanged, name.data(), false, "TailscaleBackendNetworkChanged");
 }
 
 napi_value BackendSunshineProbeAsync(napi_env env, napi_callback_info info)
@@ -401,6 +426,14 @@ napi_value BackendTaildriveUploadAsync(napi_env env, napi_callback_info info)
         "TailscaleBackendTaildriveUpload");
 }
 
+napi_value BackendTaildriveManualDownloadAsync(napi_env env, napi_callback_info info)
+{
+    return BackendTaildriveRequestAsync(env, info, AsyncInputOperation::TaildriveManualDownload,
+        "backendTaildriveManualDownloadAsync requires one request",
+        "Failed to read the Taildrive manual download request",
+        "TailscaleBackendTaildriveManualDownload");
+}
+
 napi_value BackendTaildriveTransferSnapshotAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -418,6 +451,13 @@ napi_value BackendSnapshotAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
     return CreateAsyncStringPromise(env, TSBackendSnapshot, "TailscaleBackendSnapshot");
+}
+
+napi_value BackendLocalSendRefreshAsync(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    return CreateAsyncStringPromise(
+        env, TSBackendLocalSendRefresh, "TailscaleBackendLocalSendRefresh");
 }
 
 napi_value BackendTaildropIncomingSnapshotAsync(napi_env env, napi_callback_info info)
@@ -449,12 +489,6 @@ napi_value BackendVpnConfigAsync(napi_env env, napi_callback_info info)
 {
     (void)info;
     return CreateAsyncStringPromise(env, TSBackendVPNConfig, "TailscaleBackendVpnConfig");
-}
-
-napi_value BackendNetworkChangedAsync(napi_env env, napi_callback_info info)
-{
-    (void)info;
-    return CreateAsyncStringPromise(env, TSBackendNetworkChanged, "TailscaleBackendNetworkChanged");
 }
 
 napi_value ProbeEngineAsync(napi_env env, napi_callback_info info)
@@ -830,39 +864,6 @@ napi_value BackendSetExitNode(napi_env env, napi_callback_info info)
     return result;
 }
 
-napi_value BackendSetDefaultRouteInterface(napi_env env, napi_callback_info info)
-{
-    size_t argc = 1;
-    napi_value args[1] = {nullptr};
-    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok || argc != 1) {
-        napi_throw_type_error(env, nullptr, "backendSetDefaultRouteInterface requires one interface name");
-        return nullptr;
-    }
-    size_t length = 0;
-    if (napi_get_value_string_utf8(env, args[0], nullptr, 0, &length) != napi_ok) {
-        napi_throw_type_error(env, nullptr, "Default route interface name must be a string");
-        return nullptr;
-    }
-    std::vector<char> ifName(length + 1, '\0');
-    if (napi_get_value_string_utf8(env, args[0], ifName.data(), ifName.size(), &length) != napi_ok) {
-        napi_throw_error(env, nullptr, "Failed to read the default route interface name");
-        return nullptr;
-    }
-    char* message = TSBackendSetDefaultRouteInterface(ifName.data());
-    if (message == nullptr) {
-        napi_throw_error(env, nullptr, "Default route update returned a null status");
-        return nullptr;
-    }
-    napi_value result = nullptr;
-    napi_status status = napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &result);
-    TSFreeString(message);
-    if (status != napi_ok) {
-        napi_throw_error(env, nullptr, "Failed to transfer default route update status");
-        return nullptr;
-    }
-    return result;
-}
-
 napi_value BackendPeerProbe(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -1009,11 +1010,9 @@ static napi_value Init(napi_env env, napi_value exports)
         {"backendStop", nullptr, BackendStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendLogout", nullptr, BackendLogout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStatus", nullptr, BackendStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"backendNetworkChangedAsync", nullptr, BackendNetworkChangedAsync, nullptr, nullptr, nullptr,
-            napi_default, nullptr},
-        {"backendSetDefaultRouteInterface", nullptr, BackendSetDefaultRouteInterface, nullptr, nullptr, nullptr,
-            napi_default, nullptr},
         {"backendSnapshot", nullptr, BackendSnapshotAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"backendLocalSendRefreshAsync", nullptr, BackendLocalSendRefreshAsync, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
         {"backendTaildropIncomingSnapshot", nullptr, BackendTaildropIncomingSnapshotAsync,
             nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendStopAsync", nullptr, BackendStopAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1034,6 +1033,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"backendSetExitNodeAsync", nullptr, BackendSetExitNodeAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendPeerProbe", nullptr, BackendPeerProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendPeerProbeAsync", nullptr, BackendPeerProbeAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"backendNetworkChangedAsync", nullptr, BackendNetworkChangedAsync, nullptr, nullptr, nullptr,
+            napi_default, nullptr},
         {"backendPeerConnectivityAsync", nullptr, BackendPeerConnectivityAsync, nullptr, nullptr, nullptr,
             napi_default, nullptr},
         {"backendSunshineProbeAsync", nullptr, BackendSunshineProbeAsync, nullptr, nullptr, nullptr,
@@ -1056,6 +1057,8 @@ static napi_value Init(napi_env env, napi_value exports)
             napi_default, nullptr},
         {"backendTaildriveDownloadAsync", nullptr, BackendTaildriveDownloadAsync, nullptr, nullptr, nullptr,
             napi_default, nullptr},
+        {"backendTaildriveManualDownloadAsync", nullptr, BackendTaildriveManualDownloadAsync,
+            nullptr, nullptr, nullptr, napi_default, nullptr},
         {"backendTaildriveUploadAsync", nullptr, BackendTaildriveUploadAsync, nullptr, nullptr, nullptr,
             napi_default, nullptr},
         {"backendTaildriveTransferSnapshotAsync", nullptr, BackendTaildriveTransferSnapshotAsync,

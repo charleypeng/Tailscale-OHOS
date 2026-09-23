@@ -64,7 +64,7 @@ function Receive-Layout([string]$Name) {
 
 $beforePath = Receive-Layout 'before'
 $before = Get-Content -Raw $beforePath
-foreach ($marker in @('Go go1.26.7', 'openharmony/arm64', 'engine-probe')) {
+foreach ($marker in @('Go go1.24.5', 'openharmony/arm64', 'engine-probe')) {
   if (-not $before.Contains($marker)) {
     throw "Baseline layout is missing marker: $marker"
   }
@@ -92,7 +92,7 @@ if ($appPid -notmatch '\d') {
 
 $afterPath = Receive-Layout 'after'
 $after = Get-Content -Raw $afterPath
-foreach ($marker in @('Tailscale 1.102.4', 'userspace engine initialized')) {
+foreach ($marker in @('Tailscale 1.86.5', 'userspace engine initialized')) {
   if (-not $after.Contains($marker)) {
     throw "Engine probe layout is missing marker: $marker"
   }
@@ -100,8 +100,8 @@ foreach ($marker in @('Tailscale 1.102.4', 'userspace engine initialized')) {
 
 [PSCustomObject]@{
   Result = 'passed'
-  Runtime = 'openharmony/arm64 Go 1.26.7'
-  Tailscale = '1.102.4'
+  Runtime = 'openharmony/arm64 Go 1.24.5'
+  Tailscale = '1.86.5'
   Probe = 'userspace engine initialized'
   ArtifactDir = (Resolve-Path $ArtifactDir).Path
 }

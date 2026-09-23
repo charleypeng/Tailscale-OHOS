@@ -1,16 +1,41 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$devecoHome = @(
+$installedDevEcoHomes = Get-ChildItem -Path (Join-Path $env:ProgramFiles 'Huawei') `
+  -Directory -Filter 'DevEco Studio*' -ErrorAction SilentlyContinue | ForEach-Object {
+    $_.FullName
+    Join-Path $_.FullName 'DevEco Studio'
+  }
+$devecoCandidates = @(
   $env:DEVECO_STUDIO_HOME,
   $env:DEVECO_HOME,
   'C:\Program Files\Huawei\DevEco Studio'
-) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'product-info.json')) } | Select-Object -First 1
+) + @($installedDevEcoHomes)
+$devecoHome = $devecoCandidates |
+  Where-Object { $_ -and (Test-Path (Join-Path $_ 'product-info.json')) } | Select-Object -First 1
 if (-not $devecoHome) {
   throw 'DevEco Studio was not found.'
 }
 
-$readelf = Join-Path $devecoHome 'sdk\default\openharmony\native\llvm\bin\llvm-readelf.exe'
+$sdkCandidates = @(
+  $env:DEVECO_SDK_HOME,
+  (Join-Path $env:LOCALAPPDATA 'OpenHarmony\Sdk\6.1.0-release'),
+  (Join-Path $env:LOCALAPPDATA 'OpenHarmony\Sdk\23'),
+  (Join-Path $projectRoot '.tools\harmony-sdk-26-release'),
+  (Join-Path $env:LOCALAPPDATA 'OpenHarmony\Sdk\26.0.0-release'),
+  (Join-Path $env:LOCALAPPDATA 'OpenHarmony\Sdk\26.0.0'),
+  (Join-Path $devecoHome 'sdk')
+) | Where-Object { $_ -and (Test-Path $_) }
+$sdkHome = $sdkCandidates | Select-Object -First 1
+$targetApiLevel = $env:TAILSCALE_OHOS_TARGET_API_LEVEL
+$readelfCandidates = @(
+  $(if ($targetApiLevel) { Join-Path $sdkHome "$targetApiLevel\native\llvm\bin\llvm-readelf.exe" }),
+  (Join-Path $sdkHome 'default\openharmony\native\llvm\bin\llvm-readelf.exe')
+) | Where-Object { $_ }
+$readelf = $readelfCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $readelf) {
+  throw "llvm-readelf was not found under $sdkHome"
+}
 $goLibrary = Join-Path $projectRoot 'native\go_bridge\dist\arm64-v8a\libtailscale_go.so'
 $hap = Get-ChildItem -Path (Join-Path $projectRoot 'entry\build') -Recurse -Filter '*.hap' |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -45,4 +70,12 @@ foreach ($entry in $requiredEntries) {
   }
 }
 
-Write-Host "Verified AArch64 Go/N-API HAP: $($hap.FullName)"
+$moduleJson = (tar -xOf $hap.FullName 'module.json') | ConvertFrom-Json
+if ($moduleJson.app.apiReleaseType -ne 'Release') {
+  throw "HAP uses a non-Release HarmonyOS API: $($moduleJson.app.apiReleaseType)"
+}
+if ($moduleJson.app.compileSdkVersion -match 'Beta|Canary') {
+  throw "HAP compileSdkVersion is not a Release SDK: $($moduleJson.app.compileSdkVersion)"
+}
+
+Write-Host "Verified Release API $($moduleJson.app.compileSdkVersion) AArch64 Go/N-API HAP: $($hap.FullName)"

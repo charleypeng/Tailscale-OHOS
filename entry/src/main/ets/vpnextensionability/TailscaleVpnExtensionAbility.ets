@@ -1,5 +1,5 @@
 import { Want } from '@kit.AbilityKit';
-import { connection, vpnExtension, VpnExtensionAbility } from '@kit.NetworkKit';
+import { vpnExtension, VpnExtensionAbility } from '@kit.NetworkKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -14,6 +14,7 @@ import {
 } from '../services/TaildropNotificationService';
 import { ControlServerConfig, ControlServerSettings } from '../services/ControlServerConfig';
 import { DeviceNameService } from '../services/DeviceNameService';
+import { VpnNetworkMonitor } from '../services/VpnNetworkMonitor';
 
 const DOMAIN = 0x0000;
 const TAG = 'TailscaleVpn';
@@ -31,30 +32,12 @@ const VPN_BACKEND_HANDOFF_POLL_INTERVAL_MS: number = 100;
 const VPN_BACKEND_HANDOFF_MAX_ATTEMPTS: number = 150;
 const PEER_CONNECTIVITY_REQUEST_FILE_NAME: string = 'peer-connectivity-request.json';
 const PEER_CONNECTIVITY_RESPONSE_FILE_NAME: string = 'peer-connectivity-response.json';
-
-// Only a physical data bearer may be reported to the engine as the default
-// route. A phone exposes more interfaces than a desktop host, and several of
-// them carry routable-looking addresses that can never reach a peer: the VPN
-// interface this application creates, the operator anchor (ancormnet*) and the
-// IMS/VoLTE bearer (rmnet_ims*). Reporting one of those would pin magicsock to
-// an address that says nothing about where the packets actually leave.
-function isPhysicalNetworkInterface(name: string): boolean {
-  if (name.length === 0) {
-    return false;
-  }
-  if (name.startsWith('wlan') || name.startsWith('wifi')) {
-    return true;
-  }
-  if (name === 'rmnet0' || name === 'rmnet1' || name === 'rmnet2' ||
-    name.startsWith('rmnet_data')) {
-    return true;
-  }
-  return name.startsWith('eth') || name === 'usb0';
-}
 const SUNSHINE_PROBE_REQUEST_FILE_NAME: string = 'sunshine-probe-request.json';
 const SUNSHINE_PROBE_RESPONSE_FILE_NAME: string = 'sunshine-probe-response.json';
 const MEDIA_SERVICE_PROBE_REQUEST_FILE_NAME: string = 'media-service-probe-request.json';
 const MEDIA_SERVICE_PROBE_RESPONSE_FILE_NAME: string = 'media-service-probe-response.json';
+const LOCAL_SEND_REFRESH_REQUEST_FILE_NAME: string = 'localsend-refresh-request.json';
+const LOCAL_SEND_REFRESH_RESPONSE_FILE_NAME: string = 'localsend-refresh-response.json';
 const TAILDROP_SEND_REQUEST_FILE_NAME: string = 'taildrop-send-request.json';
 const TAILDROP_TARGETS_FILE_NAME: string = 'taildrop-targets.json';
 const TAILDROP_CANCEL_REQUEST_FILE_NAME: string = 'taildrop-cancel-request.json';
@@ -66,6 +49,8 @@ const TAILDRIVE_QUERY_REQUEST_FILE_NAME: string = 'taildrive-query-request.json'
 const TAILDRIVE_QUERY_RESPONSE_FILE_NAME: string = 'taildrive-query-response.json';
 const TAILDRIVE_TRANSFER_REQUEST_FILE_NAME: string = 'taildrive-transfer-request.json';
 const TAILDRIVE_TRANSFER_RESPONSE_FILE_NAME: string = 'taildrive-transfer-response.json';
+const TAILDRIVE_MANUAL_TRANSFER_REQUEST_FILE_NAME: string = 'taildrive-manual-transfer-request.json';
+const TAILDRIVE_MANUAL_TRANSFER_RESPONSE_FILE_NAME: string = 'taildrive-manual-transfer-response.json';
 const TAILDRIVE_CONTROL_REQUEST_FILE_NAME: string = 'taildrive-control-request.json';
 const TAILDRIVE_CONTROL_RESPONSE_FILE_NAME: string = 'taildrive-control-response.json';
 const TAILDROP_CACHE_RETENTION_MS: number = 7 * 24 * 60 * 60 * 1000;
@@ -78,8 +63,6 @@ const VPN_CONNECT_CONFIG_TTL_MS: number = 15000;
 const VPN_BACKEND_STATUS_POLL_INTERVAL_MS: number = 100;
 const VPN_BACKEND_STATUS_MAX_ATTEMPTS: number = 150;
 const FILE_WATCH_CLOSE_WRITE: number = 0x8;
-const NETWORK_REBIND_DEBOUNCE_MS: number = 750;
-const NETWORK_REBIND_MIN_INTERVAL_MS: number = 3000;
 
 interface PeerSummary {
   key: string;
@@ -106,7 +89,23 @@ interface LocalSendStatus {
 
 interface PersistedPeerSnapshot {
   peers: PeerSummary[];
+  meshArcReceiver: MeshArcReceiverStatus;
   updatedAtMs: number;
+}
+
+interface MeshArcReceiverStatus {
+  state: string;
+  protocol?: string;
+  httpStatus?: number;
+  sent: number;
+  registered: number;
+  httpsReason?: string;
+  httpReason?: string;
+  checkedAtMs?: number;
+}
+
+function emptyMeshArcReceiverStatus(): MeshArcReceiverStatus {
+  return { state: 'idle', sent: 0, registered: 0 };
 }
 
 interface VpnStopRequest {
@@ -121,7 +120,6 @@ interface VpnStopResponse {
 interface VpnConnectConfigHandoff {
   createdAtMs: number;
   config: string;
-  backendHandoffComplete?: boolean;
 }
 
 interface VpnBackendHandoffRequest {
@@ -238,6 +236,7 @@ interface BackendHealthSnapshot {
   status: string;
   peers: PeerSummary[];
   taildrop: TaildropSnapshot;
+  meshArcReceiver: MeshArcReceiverStatus;
 }
 
 interface PeerConnectivityRequest {
@@ -270,6 +269,15 @@ interface MediaServiceProbeResponse {
   result: string;
 }
 
+interface LocalSendRefreshRequest {
+  requestId: number;
+}
+
+interface LocalSendRefreshResponse {
+  requestId: number;
+  status: string;
+}
+
 interface TaildriveExtensionRequest {
   requestId: number;
   operation: string;
@@ -281,6 +289,11 @@ interface TaildriveExtensionResponse {
   result: string;
 }
 
+interface TaildriveOperationResultSummary {
+  state: string;
+  reason?: string;
+}
+
 function emptyTaildropTransfer(): TaildropTransferSummary {
   return {
     requestId: 0, state: 'idle', reason: '', targetKey: '', targetName: '', fileName: '',
@@ -290,32 +303,6 @@ function emptyTaildropTransfer(): TaildropTransferSummary {
 }
 
 export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
-  // This process has no UIAbility, and a Stage-model continuous task can only be
-  // requested by one, so the keep-alive task is owned by EntryAbility instead.
-  // This process only publishes the VPN status that the ability process reads.
-  private networkMonitor?: connection.NetConnection;
-  private networkRebindTimer: number = -1;
-  private networkRebindInFlight: boolean = false;
-  private lastNetworkRebindAtMs: number = 0;
-  private uiBackendHandoffComplete: boolean = false;
-  // Physical interface reported by the network manager. It is pushed into the
-  // engine immediately before a rebind, because netmon can only pick it up
-  // while it recomputes its cached state during that call.
-  private pendingDefaultRouteInterface: string = '';
-  private publishedDefaultRouteInterface: string = '';
-  private readonly networkAvailableCallback = (_handle: connection.NetHandle): void => {
-    this.scheduleNetworkRebind('available');
-  };
-  private readonly networkLostCallback = (_handle: connection.NetHandle): void => {
-    this.scheduleNetworkRebind('lost');
-  };
-  private readonly networkCapabilitiesCallback = (_info: connection.NetCapabilityInfo): void => {
-    this.scheduleNetworkRebind('capabilities');
-  };
-  private readonly networkPropertiesCallback = (info: connection.NetConnectionPropertyInfo): void => {
-    this.observeDefaultRouteInterface(info);
-    this.scheduleNetworkRebind('properties');
-  };
   private vpnConnection?: vpnExtension.VpnConnection;
   private tunFd: number = -1;
   private statusTimer: number = -1;
@@ -328,14 +315,19 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   private peerConnectivityInFlight: boolean = false;
   private sunshineProbeInFlight: boolean = false;
   private mediaServiceProbeInFlight: boolean = false;
+  private localSendRefreshInFlight: boolean = false;
   private taildropSendInFlight: boolean = false;
   private taildropCancelInFlight: boolean = false;
   private taildropReceiveInFlight: boolean = false;
   private taildriveQueryInFlight: boolean = false;
   private taildriveTransferInFlight: boolean = false;
+  private taildriveManualTransferInFlight: boolean = false;
   private taildriveControlInFlight: boolean = false;
   private backendStopInFlight: boolean = false;
   private destroying: boolean = false;
+  private networkMonitor: VpnNetworkMonitor = new VpnNetworkMonitor((event: string, code: number): void => {
+    this.recordDiagnosticEvent(event, 'network', code);
+  });
   private taildropInboxNotificationInitialized: boolean = false;
   private notifiedTaildropInboxKeys: string[] = [];
   private taildropProgressNotificationVisible: boolean = false;
@@ -346,7 +338,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
 
   onCreate(want: Want): void {
     this.recordDiagnosticEvent('vpn_extension_created', 'lifecycle');
-    this.writePeerSnapshot([]);
+    this.writePeerSnapshot([], emptyMeshArcReceiverStatus());
     this.cleanupStaleTaildropOutbox();
     this.cleanupStaleTaildropInbox();
     this.writeTextFile(`${this.context.filesDir}/${TAILDROP_SEND_REQUEST_FILE_NAME}`, '');
@@ -357,6 +349,8 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_QUERY_RESPONSE_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_TRANSFER_REQUEST_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_TRANSFER_RESPONSE_FILE_NAME}`, '');
+    this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_MANUAL_TRANSFER_REQUEST_FILE_NAME}`, '');
+    this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_MANUAL_TRANSFER_RESPONSE_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_CONTROL_REQUEST_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${TAILDRIVE_CONTROL_RESPONSE_FILE_NAME}`, '');
     // A previous extension process can be killed before consuming a graceful
@@ -365,6 +359,8 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     this.writeTextFile(`${this.context.filesDir}/${VPN_STOP_RESPONSE_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${VPN_BACKEND_HANDOFF_REQUEST_FILE_NAME}`, '');
     this.writeTextFile(`${this.context.filesDir}/${VPN_BACKEND_HANDOFF_RESPONSE_FILE_NAME}`, '');
+    this.writeTextFile(`${this.context.filesDir}/${LOCAL_SEND_REFRESH_REQUEST_FILE_NAME}`, '');
+    this.writeTextFile(`${this.context.filesDir}/${LOCAL_SEND_REFRESH_RESPONSE_FILE_NAME}`, '');
     this.startBackendStopWatcher();
     this.writeTextFile(`${this.context.filesDir}/${VPN_CONFIG_SUMMARY_FILE_NAME}`, '');
     this.writeTaildropSnapshot({
@@ -528,9 +524,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         if (this.destroying) {
           return;
         }
-        const handoffStatus: string = this.uiBackendHandoffComplete ?
-          'OK | backend handoff | completed before extension start' :
-          await this.requestUiBackendHandoff();
+        const handoffStatus: string = await this.requestUiBackendHandoff();
         if (this.destroying) {
           return;
         }
@@ -549,14 +543,15 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         }
         this.writeStatus(finalStatus);
         if (finalStatus.includes('state=Running')) {
-          this.startNetworkMonitoring();
           this.recordDiagnosticEvent('vpn_connected', 'backend');
+          // An optional peer probe must not delay the connection heartbeat.
+          this.startStatusUpdates();
+          this.networkMonitor.start();
           const peerStatus: string = await nativeBridge.backendPeerProbeAsync();
           if (this.destroying) {
             return;
           }
           this.writePeerStatus(peerStatus);
-          this.startStatusUpdates();
         }
       } else {
         const backendState: string = backendConfigText.startsWith('FAILED') ?
@@ -610,125 +605,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       }
     }
     return -1;
-  }
-
-  private startNetworkMonitoring(): void {
-    if (this.networkMonitor !== undefined || this.destroying) {
-      return;
-    }
-    try {
-      const monitor: connection.NetConnection = connection.createNetConnection();
-      monitor.on('netAvailable', this.networkAvailableCallback);
-      monitor.on('netLost', this.networkLostCallback);
-      monitor.on('netCapabilitiesChange', this.networkCapabilitiesCallback);
-      monitor.on('netConnectionPropertiesChange', this.networkPropertiesCallback);
-      monitor.register((error?: BusinessError): void => {
-        if (error !== undefined) {
-          this.recordDiagnosticEvent('network_monitor_failed', 'register', error.code ?? -1);
-          return;
-        }
-        this.recordDiagnosticEvent('network_monitor_started', 'native');
-      });
-      this.networkMonitor = monitor;
-    } catch (error) {
-      const businessError = error as BusinessError;
-      this.recordDiagnosticEvent('network_monitor_failed', 'create', businessError.code ?? -1);
-    }
-  }
-
-  private scheduleNetworkRebind(reason: string): void {
-    if (this.destroying || this.networkMonitor === undefined) {
-      return;
-    }
-    if (this.networkRebindTimer >= 0) {
-      clearTimeout(this.networkRebindTimer);
-    }
-    const elapsedMs: number = Date.now() - this.lastNetworkRebindAtMs;
-    const delayMs: number = Math.max(NETWORK_REBIND_DEBOUNCE_MS,
-      NETWORK_REBIND_MIN_INTERVAL_MS - Math.max(0, elapsedMs));
-    this.networkRebindTimer = setTimeout(() => {
-      this.networkRebindTimer = -1;
-      this.rebindForNetworkChange(reason);
-    }, delayMs);
-  }
-
-  private rebindForNetworkChange(reason: string): void {
-    if (this.destroying || this.networkRebindInFlight) {
-      return;
-    }
-    this.networkRebindInFlight = true;
-    this.lastNetworkRebindAtMs = Date.now();
-    // The interface has to be published before the notification, because netmon
-    // recomputes its cached state inside that call and only then reads the hint.
-    this.publishDefaultRouteInterface();
-    nativeBridge.backendNetworkChangedAsync()
-      .then((status: string) => {
-        this.recordDiagnosticEvent(status.startsWith('OK') ?
-          'network_rebind_completed' : 'network_rebind_failed', reason);
-      })
-      .catch(() => this.recordDiagnosticEvent('network_rebind_failed', reason))
-      .finally(() => {
-        this.networkRebindInFlight = false;
-      });
-  }
-
-  // The engine cannot resolve the default route by itself inside the VPN
-  // sandbox: /proc/net/route carries no default entry and AF_NETLINK route
-  // dumps are denied, so netmon's default interface stays empty and magicsock
-  // keeps relay paths that belong to a network that is already gone. The
-  // physical network resolved here answers that question, so remember it and
-  // publish it right before the next rebind.
-  private observeDefaultRouteInterface(info: connection.NetConnectionPropertyInfo): void {
-    try {
-      const properties: connection.ConnectionProperties | undefined = info.connectionProperties;
-      if (properties === undefined) {
-        return;
-      }
-      const interfaceName: string = properties.interfaceName ?? '';
-      if (!isPhysicalNetworkInterface(interfaceName)) {
-        return;
-      }
-      this.pendingDefaultRouteInterface = interfaceName;
-    } catch (_error) {
-      // A missing hint only degrades DERP rebinding on a handover; it must
-      // never block network recovery.
-    }
-  }
-
-  private publishDefaultRouteInterface(): void {
-    const interfaceName: string = this.pendingDefaultRouteInterface;
-    if (interfaceName === this.publishedDefaultRouteInterface) {
-      return;
-    }
-    try {
-      const status: string = nativeBridge.backendSetDefaultRouteInterface(interfaceName);
-      this.publishedDefaultRouteInterface = interfaceName;
-      this.recordDiagnosticEvent('network_default_route_published',
-        interfaceName.length > 0 ? interfaceName : 'none');
-      if (!status.startsWith('OK')) {
-        this.recordDiagnosticEvent('network_default_route_rejected', interfaceName);
-      }
-    } catch (_error) {
-      // A missing hint only degrades DERP rebinding on a handover; it must
-      // never block network recovery.
-    }
-  }
-
-  private stopNetworkMonitoring(): void {
-    if (this.networkRebindTimer >= 0) {
-      clearTimeout(this.networkRebindTimer);
-      this.networkRebindTimer = -1;
-    }
-    const monitor: connection.NetConnection | undefined = this.networkMonitor;
-    this.networkMonitor = undefined;
-    if (monitor === undefined) {
-      return;
-    }
-    try {
-      monitor.unregister((_error?: BusinessError): void => {});
-    } catch (_error) {
-      // The system may already have released the callback with the VPN.
-    }
   }
 
   private async replaceExistingVpn(connection: vpnExtension.VpnConnection,
@@ -919,7 +795,6 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
         handoff.config.length === 0 || handoff.config.length > 8192 || handoff.config.startsWith('FAILED')) {
         return '';
       }
-      this.uiBackendHandoffComplete = handoff.backendHandoffComplete === true;
       return handoff.config;
     } catch (_error) {
       return '';
@@ -1015,7 +890,10 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       this.processTaildropReceiveRequest();
       this.processTaildriveQueryRequest();
       this.processTaildriveTransferRequest();
+      this.processTaildriveManualTransferRequest();
       this.processTaildriveControlRequest();
+      this.processLocalSendRefreshRequest();
+      this.processPeerConnectivityRequest();
     }, 100);
     // The regular backend snapshot can wait on file-target and inbox queries.
     // Keep receive notifications tied to the IPN-bus state so a fast transfer
@@ -1037,13 +915,13 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       }
       this.statusUpdateInFlight = true;
       nativeBridge.backendSnapshot()
-        .then((snapshotText: string) => {
+        .then((snapshotText: string): void => {
           if (this.destroying) {
             return;
           }
           const snapshot: BackendHealthSnapshot = JSON.parse(snapshotText) as BackendHealthSnapshot;
           this.writeStatus(snapshot.status);
-          this.writePeerSnapshot(snapshot.peers);
+          this.writePeerSnapshot(snapshot.peers, snapshot.meshArcReceiver);
           this.writeTaildropSnapshot(snapshot.taildrop);
           this.processPeerConnectivityRequest();
           this.processSunshineProbeRequest();
@@ -1056,7 +934,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
           if (this.destroying) {
             return;
           }
-          this.writeStatus('FAILED | VPN backend | status unavailable');
+          // Optional snapshot services can fail while the tunnel is healthy.
+          // Preserve the last known backend state instead of claiming failure.
+          this.recordDiagnosticEvent('vpn_snapshot_unavailable', 'status');
           this.writeTaildropSnapshot({
             state: 'unavailable', reason: 'query_failed', targets: [],
             incomingFiles: this.latestTaildropSnapshot.incomingFiles,
@@ -1117,13 +997,61 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
       JSON.stringify(persisted));
   }
 
-  private writePeerSnapshot(peers: PeerSummary[]): void {
+  private writePeerSnapshot(peers: PeerSummary[], meshArcReceiver: MeshArcReceiverStatus): void {
     const persisted: PersistedPeerSnapshot = {
       peers: peers,
+      meshArcReceiver: meshArcReceiver,
       updatedAtMs: Date.now()
     };
     this.writeAtomicTextFile(`${this.context.filesDir}/${VPN_PEERS_FILE_NAME}`,
       JSON.stringify(persisted));
+  }
+
+  private processLocalSendRefreshRequest(): void {
+    if (this.localSendRefreshInFlight || this.destroying || this.backendStopInFlight) {
+      return;
+    }
+    const requestPath: string = `${this.context.filesDir}/${LOCAL_SEND_REFRESH_REQUEST_FILE_NAME}`;
+    try {
+      if (!fileIo.accessSync(requestPath)) {
+        return;
+      }
+      const requestText: string = fileIo.readTextSync(requestPath).trim();
+      if (requestText.length === 0) {
+        return;
+      }
+      this.writeTextFile(requestPath, '');
+      const request: LocalSendRefreshRequest = JSON.parse(requestText) as LocalSendRefreshRequest;
+      if (request.requestId <= 0) {
+        return;
+      }
+      this.localSendRefreshInFlight = true;
+      nativeBridge.backendLocalSendRefreshAsync()
+        .then((status: string): Promise<void> => nativeBridge.backendSnapshot()
+          .then((snapshotText: string): void => {
+            if (this.destroying) {
+              return;
+            }
+            const snapshot: BackendHealthSnapshot = JSON.parse(snapshotText) as BackendHealthSnapshot;
+            this.writePeerSnapshot(snapshot.peers, snapshot.meshArcReceiver);
+            const response: LocalSendRefreshResponse = { requestId: request.requestId, status: status };
+            this.writeTextFile(`${this.context.filesDir}/${LOCAL_SEND_REFRESH_RESPONSE_FILE_NAME}`,
+              JSON.stringify(response));
+          }))
+        .catch(() => {
+          const response: LocalSendRefreshResponse = {
+            requestId: request.requestId,
+            status: 'FAILED | LocalSend refresh | extension error'
+          };
+          this.writeTextFile(`${this.context.filesDir}/${LOCAL_SEND_REFRESH_RESPONSE_FILE_NAME}`,
+            JSON.stringify(response));
+        })
+        .finally(() => {
+          this.localSendRefreshInFlight = false;
+        });
+    } catch (_error) {
+      this.writeTextFile(requestPath, '');
+    }
   }
 
   private processBackendStopRequest(): boolean {
@@ -1154,6 +1082,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   }
 
   private async stopVpnAndBackend(request: VpnStopRequest): Promise<void> {
+    this.networkMonitor.stop();
     let status: string = 'FAILED | backend stop | extension error';
     const reconnectConfigPromise: Promise<string> = nativeBridge.backendVpnConfigAsync()
       .catch(() => 'FAILED | VPN config | extension error');
@@ -1383,12 +1312,29 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     if (request === undefined) {
       return;
     }
+    hilog.info(DOMAIN, TAG, 'Taildrive transfer accepted. operation=%{public}s requestId=%{public}s',
+      request.operation, request.requestId.toString());
     this.taildriveTransferInFlight = true;
     const task: Promise<string> = request.operation === 'download' ?
       nativeBridge.backendTaildriveDownloadAsync(request.payload) :
       nativeBridge.backendTaildriveUploadAsync(request.payload);
     this.completeTaildriveRequest(TAILDRIVE_TRANSFER_RESPONSE_FILE_NAME, request, task,
       () => this.taildriveTransferInFlight = false);
+  }
+
+  private processTaildriveManualTransferRequest(): void {
+    if (this.taildriveManualTransferInFlight || this.destroying || this.backendStopInFlight) {
+      return;
+    }
+    const request: TaildriveExtensionRequest | undefined = this.takeTaildriveRequest(
+      TAILDRIVE_MANUAL_TRANSFER_REQUEST_FILE_NAME, ['download']);
+    if (request === undefined) {
+      return;
+    }
+    this.taildriveManualTransferInFlight = true;
+    const task: Promise<string> = nativeBridge.backendTaildriveManualDownloadAsync(request.payload);
+    this.completeTaildriveRequest(TAILDRIVE_MANUAL_TRANSFER_RESPONSE_FILE_NAME, request, task,
+      () => this.taildriveManualTransferInFlight = false);
   }
 
   private processTaildriveControlRequest(): void {
@@ -1433,17 +1379,37 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   }
 
   private completeTaildriveRequest(responseFileName: string, request: TaildriveExtensionRequest,
-    task: Promise<string>, finish: () => void): void {
+    task: Promise<string>, finish: () => void, startedAtMs: number = Date.now()): void {
     task.then((result: string) => {
+      let state: string = 'unknown';
+      let reason: string = '';
+      try {
+        const summary: TaildriveOperationResultSummary = JSON.parse(result) as TaildriveOperationResultSummary;
+        state = summary.state;
+        reason = summary.reason ?? '';
+      } catch (_error) {}
+      hilog.info(DOMAIN, TAG,
+        'Taildrive native task completed. operation=%{public}s requestId=%{public}s state=%{public}s ' +
+        'reason=%{public}s durationMs=%{public}s',
+        request.operation, request.requestId.toString(), state, reason,
+        (Date.now() - startedAtMs).toString());
       const response: TaildriveExtensionResponse = { requestId: request.requestId, result: result };
-      this.writeAtomicTextFile(`${this.context.filesDir}/${responseFileName}`, JSON.stringify(response));
+      const written: boolean = this.writeAtomicTextFile(
+        `${this.context.filesDir}/${responseFileName}`, JSON.stringify(response));
+      hilog.info(DOMAIN, TAG, 'Taildrive response write. operation=%{public}s written=%{public}s',
+        request.operation, written ? 'true' : 'false');
     }).catch(() => {
+      hilog.error(DOMAIN, TAG, 'Taildrive native task rejected. operation=%{public}s requestId=%{public}s',
+        request.operation, request.requestId.toString());
       const response: TaildriveExtensionResponse = {
         requestId: request.requestId,
         result: this.taildriveExtensionFailure(request.operation)
       };
       this.writeAtomicTextFile(`${this.context.filesDir}/${responseFileName}`, JSON.stringify(response));
-    }).finally(finish);
+    }).finally(() => {
+      finish();
+      hilog.info(DOMAIN, TAG, 'Taildrive request released. operation=%{public}s', request.operation);
+    });
   }
 
   private taildriveExtensionFailure(operation: string): string {
@@ -1988,7 +1954,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
 
   onDestroy(): void {
     this.destroying = true;
-    this.stopNetworkMonitoring();
+    this.networkMonitor.stop();
     this.recordDiagnosticEvent('vpn_extension_destroyed', 'lifecycle');
     this.stopBackendStopWatcher();
     if (this.statusTimer >= 0) {
@@ -2013,7 +1979,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
     } catch (_error) {
       this.recordDiagnosticEvent('vpn_backend_stop_failed', 'destroy');
     }
-    this.writePeerSnapshot([]);
+    // Keep the last authenticated peer directory for the disconnected UI.
+    // The VPN connection is being torn down, but the cached transfer view
+    // still needs the device list until a new live snapshot replaces it.
     const finalTransfer: TaildropTransferSummary = this.latestTaildropSnapshot.transfer.state === 'sending' ||
       this.latestTaildropSnapshot.transfer.state === 'queued' ?
       this.failedTaildropTransfer(this.latestTaildropSnapshot.transfer.requestId, 'disconnected',

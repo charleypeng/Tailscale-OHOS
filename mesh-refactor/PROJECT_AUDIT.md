@@ -64,7 +64,7 @@
 ### 2.4 Tailscale 后端交互
 
 - ArkTS 通过 `libtailscale_ohos.so` 调用 C++ Node-API，再进入 Go c-shared 库。
-- Go 后端基于 Tailscale 1.102.4 的 tsnet，并使用 HarmonyOS 外部 TUN 适配。
+- Go 后端基于 Tailscale 1.86.5 的 tsnet，并使用 HarmonyOS 外部 TUN 适配。
 - 已有异步 NAPI 接口，耗时后端调用不会全部阻塞 ArkUI 主线程。
 - ArkTS UI、VPN Extension 和 Go 层存在重复 DTO；若改动字段，当前缺少统一
   的编译期契约和 golden fixture 保护。

@@ -81,7 +81,7 @@ function Get-BackendStatus([string]$Layout) {
 
 $beforePath = Receive-Layout 'before'
 $before = Get-Content -Raw $beforePath
-foreach ($marker in @('backend-start', 'backend-refresh', 'Go go1.26.7', 'openharmony/arm64')) {
+foreach ($marker in @('backend-start', 'backend-refresh', 'Go go1.24.5', 'openharmony/arm64')) {
   if (-not $before.Contains($marker)) { throw "Baseline marker missing: $marker" }
 }
 

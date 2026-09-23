@@ -50,7 +50,7 @@ func TSProbeEngine() (result *C.char) {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker.Get(),
+		HealthTracker: sys.HealthTracker(),
 		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
@@ -88,22 +88,14 @@ func TSBackendStatus() *C.char {
 	return C.CString(harmonyBackend.status())
 }
 
-//export TSBackendNetworkChanged
-func TSBackendNetworkChanged() *C.char {
-	return C.CString(harmonyBackend.networkChanged())
-}
-
-//export TSBackendSetDefaultRouteInterface
-func TSBackendSetDefaultRouteInterface(ifName *C.char) *C.char {
-	if ifName == nil {
-		return C.CString(harmonyBackend.setDefaultRouteInterface(""))
-	}
-	return C.CString(harmonyBackend.setDefaultRouteInterface(C.GoString(ifName)))
-}
-
 //export TSBackendSnapshot
 func TSBackendSnapshot() *C.char {
 	return C.CString(harmonyBackend.snapshot())
+}
+
+//export TSBackendLocalSendRefresh
+func TSBackendLocalSendRefresh() *C.char {
+	return C.CString(harmonyBackend.refreshMeshArcDevices())
 }
 
 //export TSBackendTaildropIncomingSnapshot
@@ -251,6 +243,14 @@ func TSBackendTaildriveDownload(request *C.char) *C.char {
 	return C.CString(harmonyBackend.taildriveDownload(C.GoString(request)))
 }
 
+//export TSBackendTaildriveManualDownload
+func TSBackendTaildriveManualDownload(request *C.char) *C.char {
+	if request == nil {
+		return C.CString(`{"state":"failed","reason":"invalid_request"}`)
+	}
+	return C.CString(harmonyBackend.taildriveManualDownload(C.GoString(request)))
+}
+
 //export TSBackendTaildriveUpload
 func TSBackendTaildriveUpload(request *C.char) *C.char {
 	if request == nil {
@@ -299,3 +299,11 @@ func TSFreeString(value *C.char) {
 }
 
 func main() {}
+
+//export TSBackendNetworkChanged
+func TSBackendNetworkChanged(interfaceName *C.char) *C.char {
+	if interfaceName == nil {
+		return C.CString("FAILED | network change | missing interface")
+	}
+	return C.CString(harmonyBackend.networkChanged(C.GoString(interfaceName)))
+}

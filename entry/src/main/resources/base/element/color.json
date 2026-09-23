@@ -151,6 +151,10 @@
     {
       "name": "emphasize",
       "value": "#222b40"
+    },
+    {
+      "name": "tab_bar_gradient_mask",
+      "value": "#66F1F3F5"
     }
   ]
 }
