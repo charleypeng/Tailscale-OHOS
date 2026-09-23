@@ -83,6 +83,9 @@ protocols, persisted state, build entry points and release metadata.
 - The Go `TestHarmonyProblematicInterfaces` test passed: modem/anchor/overlay
   interfaces are excluded while real cellular, Ethernet, Wi-Fi and tethering
   interfaces remain eligible.
+- The phone's published endpoint list contained zero overlay or operator-anchor
+  candidates after the final build. This was checked from the computer's cached
+  network map without sending an additional peer probe.
 - The final Debug HAP was installed successfully, preserving login and user data.
   It uses the phone's existing local-test code `100000004`; repository metadata
   `100000003` was restored byte for byte. No uninstall, Release build or upload.
@@ -97,8 +100,12 @@ protocols, persisted state, build entry points and release metadata.
   Wi-Fi adapter had IPv6 enabled but only a link-local address. Six discovery
   responses used DERP. This is consistent with hard NAT at both ends and no shared
   public IPv6 path; it is not evidence that app code can make this pair direct.
-- A 720-second cellular lock-screen validation is in progress. Final results are
-  recorded after completion; the device remains USB/HDC attached and charging.
+- The uninterrupted 720-second cellular lock test was **not completed**. Two runs
+  recorded sleeping-state samples through 279 and 309 seconds respectively, with
+  the same UI/VPN processes and fresh heartbeats, then the screen woke. The system reported
+  `PICKUP` for the second interruption. The user requested skipping the subsequent
+  retry, which was stopped. These runs are not counted as a continuous-lock pass.
+  All device work used USB/HDC with charging; battery-only idle is untested.
 
 Tailscale documents these limits in [device connectivity](https://tailscale.com/docs/reference/device-connectivity)
 and [IPv6 support](https://tailscale.com/docs/concepts/ipv6). A reachable UDP mapping
