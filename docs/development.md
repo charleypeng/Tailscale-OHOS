@@ -1,6 +1,6 @@
 # Developing MeshArc
 
-[简体中文首页](../README.md) · [English overview](../README.en.md) · [Contributing](../CONTRIBUTING.md)
+[Project overview](../README.md) · [Contributing](../CONTRIBUTING.md)
 
 MeshArc is a native HarmonyOS NEXT client built around the Tailscale userspace engine. This guide covers the public source tree and the repository's Windows / PowerShell build and HDC workflow.
 
