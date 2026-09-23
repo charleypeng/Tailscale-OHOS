@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
@@ -271,6 +272,78 @@ func TestProbeMeshArcLocalSendFallsBackToHTTPAndRejectsInvalidResponses(t *testi
 	}
 }
 
+func TestProbeMeshArcLocalSendAllowsRelayHandshakeLatency(t *testing.T) {
+	client := &http.Client{Transport: meshArcRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Scheme != "https" {
+			t.Error("healthy HTTPS receiver should not require HTTP fallback")
+		}
+		select {
+		case <-time.After(2 * time.Second):
+			return meshArcProbeResponse(`{"alias":"Relayed PC","version":"2.1","fingerprint":"cert"}`), nil
+		case <-request.Context().Done():
+			return nil, request.Context().Err()
+		}
+	})}
+	_, protocol, ok := probeMeshArcLocalSend(context.Background(), client, "100.64.0.11", "probe-cert")
+	if !ok || protocol != "https" {
+		t.Fatalf("healthy relayed receiver was rejected: protocol=%q ok=%t", protocol, ok)
+	}
+}
+
+func TestProbeMeshArcLocalSendRespectsParentDeadline(t *testing.T) {
+	client := &http.Client{Transport: meshArcRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, _, ok := probeMeshArcLocalSend(ctx, client, "100.64.0.11", "probe-cert"); ok {
+		t.Fatal("a cancelled probe was accepted")
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("probe ignored its caller's deadline")
+	}
+}
+
+func TestMeshArcRefreshLockWaitRespectsDeadline(t *testing.T) {
+	server := &tsnet.Server{}
+	controller := &backendController{server: server, client: &local.Client{}, generation: 1}
+	controller.meshArcDeviceRefreshMu.Lock()
+	defer controller.meshArcDeviceRefreshMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		controller.syncMeshArcDevicesOnce(ctx, server, 1, controller.client)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh waited for another sweep beyond its deadline")
+	}
+}
+
+func TestCancelledMeshArcSweepPreservesKnownStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &local.Client{Transport: meshArcRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		cancel()
+		return meshArcProbeResponse(`{"BackendState":"Running","Peer":{}}`), nil
+	})}
+	server := &tsnet.Server{}
+	controller := &backendController{server: server, client: client, generation: 1,
+		meshArcDeviceStatuses: map[string]meshArcDeviceStatus{
+			"peer-pc": {State: "available", CheckedAtMS: 100},
+		}, meshArcDeviceFailures: map[string]int{"peer-pc": 1}}
+	controller.syncMeshArcDevicesOnce(ctx, server, 1, client)
+	if controller.meshArcDeviceStatuses["peer-pc"].State != "available" ||
+		controller.meshArcDeviceFailures["peer-pc"] != 1 {
+		t.Fatal("cancelled work replaced known availability or counted a failure")
+	}
+}
+
 func TestMeshArcCertificateFingerprintMatchesLocalSendFormat(t *testing.T) {
 	certificate, err := newMeshArcDeviceClientCertificate()
 	if err != nil {
@@ -330,7 +403,7 @@ func TestPostMeshArcDevicesSendsClientCertificateOverHTTPS(t *testing.T) {
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte(`{"ok":true,"registered":0}`))
 	}))
-	server.TLS.ClientAuth = tls.RequireAnyClientCert
+	server.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert}
 	server.StartTLS()
 	defer server.Close()
 

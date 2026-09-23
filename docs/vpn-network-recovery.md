@@ -145,6 +145,45 @@ Validation on 2026-09-23:
   disconnect/reconnect was not performed in this follow-up. The previously
   skipped uninterrupted lock-screen test remains skipped.
 
+## LocalSend discovery over the relayed path
+
+The same computer's LocalSend listener was running and its local HTTPS info
+endpoint responded successfully, while the phone repeatedly marked it unavailable.
+The 1.5-second discovery deadline was too short for TCP, mutual TLS, and the
+LocalSend request over cellular DERP. A regression receiver answering after two
+seconds reproduced the failure with the old code.
+
+Each HTTPS/HTTP attempt now has five seconds. Manual refresh has a fifteen-second
+budget, including waiting for a periodic sweep, and the UI allows twenty-five
+seconds for that refresh and its following snapshot. A second failure sample is
+only started when enough budget remains. Cancelled sweeps do not erase known
+availability or count as another receiver failure.
+
+There was also a display issue: the mounted detail sheet could retain the peer
+object captured when it opened, and its nested status builders passed multiple
+values that did not update. LocalSend properties now read the observed current
+directory; status rows/capsules use a single object literal passed by reference.
+This follows the official [ArkUI Builder parameter rules](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-builder)
+and keeps the sheet mounted without adding animations.
+
+Validation on 2026-09-23:
+
+- Eighteen native LocalSend tests pass, including delayed HTTPS discovery,
+  cancellation, refresh-lock deadlines, HTTP fallback, and client certificates.
+  The Linux test executable was cross-compiled with the repository Go toolchain
+  and run in WSL. An existing nil TLS configuration in the HTTPS test fixture
+  was corrected so the certificate test could run.
+- Thirty-six ArkTS controller/service tests pass, including current-directory
+  LocalSend state replacing a stale detail-sheet peer.
+- The final Debug HAP compiled and was installed without clearing device data.
+- With the phone on cellular and the computer on Wi-Fi, repeated phone snapshots
+  report LocalSend available over HTTPS on port 53317, protocol version 2.1.
+  The device detail sheet displays LocalSend available; a manual refresh changes
+  it to refreshing and back to available without reopening the sheet.
+
+Discovery retains the existing [LocalSend v2 register protocol](https://github.com/localsend/protocol#32-http-legacy-mode).
+This validation concerns discovery and status updates; it did not send files.
+
 ## Official API reference
 
 The official HarmonyOS Knowledge MCP documentation was consulted before using
