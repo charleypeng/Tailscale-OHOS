@@ -1,13 +1,17 @@
-# MeshArc 更新日志
+# MeshArc changelog
 
-## 1.1.0 · 2026-09-23
+## 1.1.0 (100000003) · September 23, 2026
 
-- 新增 VPN 持续后台任务与真实流量通知，改进系统取消后的恢复及用户主动关闭处理。
-- 优化连接心跳与状态反馈，避免可选探测失败误报断开。
-- 修复首页长设备列表滚动、设备详情半模态手势及更新日志面板操作。
-- 更新项目中英文首页、安装入口、开发文档与贡献指南。
+Tailscale OHOS is now MeshArc. The repository retains the name Tailscale-OHOS.
 
-完整中英文发布说明及包校验信息见 [1.1.0 Release Notes](docs/releases/1.1.0.md)。
+- Added continuous background VPN support and a notification with actual session traffic totals.
+- Improved recovery after temporary status failures and system cancellation, while respecting user dismissal.
+- Improved connection updates and fixed false disconnect reports from optional service checks.
+- Fixed long device-list scrolling, device-detail gestures and release-note panel actions.
+- Refined navigation icons, labels and gradient overlays.
+- Fixed vendor SDK metadata detection in the build scripts.
+
+Read the [full release notes](docs/releases/1.1.0.md) for feature highlights, compatibility, contributors and validation details.
 
 ## 0.9.10 更新记录
 
