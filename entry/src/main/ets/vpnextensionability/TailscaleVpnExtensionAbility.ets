@@ -14,6 +14,7 @@ import {
 } from '../services/TaildropNotificationService';
 import { ControlServerConfig, ControlServerSettings } from '../services/ControlServerConfig';
 import { DeviceNameService } from '../services/DeviceNameService';
+import { VpnNetworkMonitor } from '../services/VpnNetworkMonitor';
 
 const DOMAIN = 0x0000;
 const TAG = 'TailscaleVpn';
@@ -324,6 +325,9 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   private taildriveControlInFlight: boolean = false;
   private backendStopInFlight: boolean = false;
   private destroying: boolean = false;
+  private networkMonitor: VpnNetworkMonitor = new VpnNetworkMonitor((event: string, code: number): void => {
+    this.recordDiagnosticEvent(event, 'network', code);
+  });
   private taildropInboxNotificationInitialized: boolean = false;
   private notifiedTaildropInboxKeys: string[] = [];
   private taildropProgressNotificationVisible: boolean = false;
@@ -542,6 +546,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
           this.recordDiagnosticEvent('vpn_connected', 'backend');
           // An optional peer probe must not delay the connection heartbeat.
           this.startStatusUpdates();
+          this.networkMonitor.start();
           const peerStatus: string = await nativeBridge.backendPeerProbeAsync();
           if (this.destroying) {
             return;
@@ -1077,6 +1082,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
   }
 
   private async stopVpnAndBackend(request: VpnStopRequest): Promise<void> {
+    this.networkMonitor.stop();
     let status: string = 'FAILED | backend stop | extension error';
     const reconnectConfigPromise: Promise<string> = nativeBridge.backendVpnConfigAsync()
       .catch(() => 'FAILED | VPN config | extension error');
@@ -1948,6 +1954,7 @@ export default class TailscaleVpnExtensionAbility extends VpnExtensionAbility {
 
   onDestroy(): void {
     this.destroying = true;
+    this.networkMonitor.stop();
     this.recordDiagnosticEvent('vpn_extension_destroyed', 'lifecycle');
     this.stopBackendStopWatcher();
     if (this.statusTimer >= 0) {

@@ -417,6 +417,7 @@ func (b *backendController) startWithDevice(stateDir, deviceModel, controlURL st
 	generation := b.generation
 	startContext, cancelStart := context.WithCancel(context.Background())
 	server := &tsnet.Server{
+		Port:                   41641,
 		Dir:                    profileStateDir,
 		Hostname:               harmonyHostname(trimmedModel),
 		ControlURL:             normalizedControlURL,
@@ -1999,7 +2000,22 @@ func (b *backendController) peerProbe() string {
 	return "SKIPPED | peer TSMP probe | no IPv4 peer"
 }
 
-// peerConnectivity performs one bounded path probe against a UI-selected peer. The
+func (b *backendController) networkChanged(interfaceName string) string {
+	b.mu.Lock()
+	server, ready := b.server, !b.starting && b.externalTun
+	b.mu.Unlock()
+	if server == nil || !ready {
+		return "FAILED | network change | backend unavailable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.NotifyNetworkChange(ctx, interfaceName); err != nil {
+		return "FAILED | network change | refresh unavailable"
+	}
+	return "OK | network change | refreshed"
+}
+
+// peerConnectivity performs bounded path discovery against a UI-selected peer. The
 // UI passes only the stable hashed peer key and the result contains aggregate
 // reachability metrics, never the peer address, name, endpoint, or key.
 func (b *backendController) peerConnectivity(peerKey string) string {
@@ -2010,9 +2026,11 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 	if client == nil {
 		return marshalPeerConnectivity(result)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	status, err := client.Status(ctx)
-	cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	statusCtx, statusCancel := context.WithTimeout(ctx, 2*time.Second)
+	status, err := client.Status(statusCtx)
+	statusCancel()
 	if err != nil {
 		result.Reason = "status_unavailable"
 		return marshalPeerConnectivity(result)
@@ -2054,13 +2072,16 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 
 	// PingDisco is Tailscale's path-discovery primitive. Unlike TSMP it reports
 	// direct endpoints, peer relays, and DERP regions without guessing from RTT.
-	const attempts = 1
+	const attempts = 6
 	latencies := make([]int, 0, attempts)
-	result.Sent = attempts
 	pathType := "unknown"
 	relayRegion := ""
 	for attempt := 0; attempt < attempts; attempt++ {
-		pingCtx, pingCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		if ctx.Err() != nil {
+			break
+		}
+		result.Sent++
+		pingCtx, pingCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 		pingResult, pingErr := client.Ping(pingCtx, target, tailcfg.PingDisco)
 		pingCancel()
 		if pingErr == nil && pingResult != nil && pingResult.Err == "" {
@@ -2069,6 +2090,9 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 			if pingResult.Endpoint != "" {
 				pathType = "direct"
 				relayRegion = ""
+				// A DERP response often arrives before UDP hole punching completes.
+				// Stop only once a direct endpoint has actually answered.
+				break
 			} else if pathType != "direct" && pingResult.PeerRelay != "" {
 				pathType = "peerRelay"
 				relayRegion = ""
@@ -2077,16 +2101,24 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 				relayRegion = pingResult.DERPRegionCode
 			}
 		}
+		if attempt+1 < attempts {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+		}
 	}
 	result.Received = len(latencies)
-	result.LossPercent = (attempts - result.Received) * 100 / attempts
+	if result.Sent > 0 {
+		result.LossPercent = (result.Sent - result.Received) * 100 / result.Sent
+	}
 	if result.Received == 0 {
 		result.Reason = "no_response"
 		return marshalPeerConnectivity(result)
 	}
 	result.State = "reachable"
 	result.Reason = ""
-	if result.Received < attempts {
+	if result.Received < result.Sent {
 		result.State = "degraded"
 	}
 	result.MinLatencyMS = latencies[0]
@@ -2098,7 +2130,9 @@ func (b *backendController) peerConnectivity(peerKey string) string {
 		totalLatencyMS += latencyMS
 	}
 	result.AvgLatencyMS = totalLatencyMS / result.Received
-	result.LatencyMS = result.AvgLatencyMS
+	// Label the selected path with its most recent response, rather than
+	// averaging an initial DERP hop into the eventual direct-path latency.
+	result.LatencyMS = latencies[len(latencies)-1]
 	result.PathType = pathType
 	result.RelayRegion = relayRegion
 	return marshalPeerConnectivity(result)
@@ -2693,7 +2727,12 @@ func (b *backendController) formatRunningStatus(
 	tunDevice := b.tunDevice
 	subnetRoutes := b.subnetRoutes
 	phase := b.phase
+	server := b.server
 	b.mu.Unlock()
+	networkDiagnostics := "netCheck=unavailable"
+	if server != nil {
+		networkDiagnostics = server.NetworkDiagnostics()
+	}
 	exitNodeSelected := prefsErr == nil && prefs != nil &&
 		(!prefs.ExitNodeID.IsZero() || prefs.ExitNodeIP.IsValid())
 	subnetRoutesEnabled := prefsErr == nil && prefs != nil && prefs.RouteAll
@@ -2708,7 +2747,7 @@ func (b *backendController) formatRunningStatus(
 		dnsQueries, dnsResponses, dnsAnswers = tunDevice.dnsCounts()
 	}
 	return fmt.Sprintf(
-		"OK | state=%s | loginURLReady=%t | tailscaleIPs=%d | tun=%t | exitNode=%t | routeAll=%t | exitNodeLAN=%t | subnetRoutes=%d | tunRead=%d | tunWrite=%d | tunReadErrors=%d | tunWriteErrors=%d | trafficSession=%d | txBytes=%d | rxBytes=%d | dnsQ=%d | dnsR=%d | dnsA=%d | netUp=unknown | phase=%s",
+		"OK | state=%s | loginURLReady=%t | tailscaleIPs=%d | tun=%t | exitNode=%t | routeAll=%t | exitNodeLAN=%t | subnetRoutes=%d | tunRead=%d | tunWrite=%d | tunReadErrors=%d | tunWriteErrors=%d | trafficSession=%d | txBytes=%d | rxBytes=%d | dnsQ=%d | dnsR=%d | dnsA=%d | netUp=unknown | %s | phase=%s",
 		status.BackendState,
 		status.AuthURL != "",
 		len(status.TailscaleIPs),
@@ -2727,6 +2766,7 @@ func (b *backendController) formatRunningStatus(
 		dnsQueries,
 		dnsResponses,
 		dnsAnswers,
+		networkDiagnostics,
 		phase,
 	)
 }

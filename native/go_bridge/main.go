@@ -299,3 +299,11 @@ func TSFreeString(value *C.char) {
 }
 
 func main() {}
+
+//export TSBackendNetworkChanged
+func TSBackendNetworkChanged(interfaceName *C.char) *C.char {
+	if interfaceName == nil {
+		return C.CString("FAILED | network change | missing interface")
+	}
+	return C.CString(harmonyBackend.networkChanged(C.GoString(interfaceName)))
+}

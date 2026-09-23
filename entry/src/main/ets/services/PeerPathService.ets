@@ -5,7 +5,9 @@ import { ConnectionPathType, PeerPathResult } from './StreamingModels';
 const REQUEST_FILE: string = 'peer-connectivity-request.json';
 const RESPONSE_FILE: string = 'peer-connectivity-response.json';
 const CACHE_TTL_MS: number = 25000;
-const TIMEOUT_MS: number = 2500;
+// Native discovery has a shared ten-second budget including status lookup.
+const TIMEOUT_MS: number = 12000;
+const TRANSIENT_CACHE_TTL_MS: number = 3000;
 
 interface PeerPathResponse {
   requestId: number;
@@ -49,11 +51,13 @@ export class PeerPathService {
 
   private async probeInternal(peerKey: string, vpnConnected: boolean, force: boolean): Promise<PeerPathResult> {
     const cached: PeerPathResult | undefined = this.cache.get(peerKey);
-    if (!force && cached !== undefined && Date.now() - cached.checkedAt < CACHE_TTL_MS) {
-      return cached;
-    }
     if (!vpnConnected) {
+      this.cache.delete(peerKey);
       return { type: 'unknown', checkedAt: Date.now(), errorMessage: 'mesh_disconnected' };
+    }
+    if (!force && cached !== undefined && Date.now() - cached.checkedAt <
+      (cached.type === 'direct' ? CACHE_TTL_MS : TRANSIENT_CACHE_TTL_MS)) {
+      return cached;
     }
     const requestGeneration: number = (this.requestIds.get(peerKey) ?? 0) + 1;
     this.requestIds.set(peerKey, requestGeneration);
