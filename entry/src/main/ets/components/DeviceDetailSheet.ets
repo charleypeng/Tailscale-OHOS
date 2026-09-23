@@ -1,5 +1,16 @@
 import { PeerPathResult } from '../services/StreamingModels';
 
+interface StatusCapsuleData {
+  label: ResourceStr;
+  state: string;
+}
+
+interface ServiceStatusRowData {
+  title: ResourceStr;
+  label: ResourceStr;
+  state: string;
+}
+
 @Component
 export struct DeviceDetailSheet {
   @Prop online: boolean = false;
@@ -241,17 +252,17 @@ export struct DeviceDetailSheet {
   }
 
   @Builder
-  private StatusCapsule(label: ResourceStr, state: string) {
+  private StatusCapsule($$: StatusCapsuleData) {
     Stack({ alignContent: Alignment.End }) {
-      Text(label)
+      Text($$.label)
         .fontSize(11)
         .fontWeight(FontWeight.Medium)
-        .fontColor(state === 'available' ? $r('app.color.status_success') :
-          state === 'checking' ? $r('app.color.status_warning') :
+        .fontColor($$.state === 'available' ? $r('app.color.status_success') :
+          $$.state === 'checking' ? $r('app.color.status_warning') :
             $r('sys.color.font_secondary'))
         .padding({ left: 9, right: 9, top: 4, bottom: 4 })
-        .backgroundColor(state === 'available' ? '#1837B77A' :
-          state === 'checking' ? '#18F59E0B' : '#12000000')
+        .backgroundColor($$.state === 'available' ? '#1837B77A' :
+          $$.state === 'checking' ? '#18F59E0B' : '#12000000')
         .borderRadius(12)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -263,15 +274,15 @@ export struct DeviceDetailSheet {
   }
 
   @Builder
-  private ServiceStatusRow(title: ResourceStr, label: ResourceStr, state: string) {
+  private ServiceStatusRow($$: ServiceStatusRowData) {
     Row({ space: 12 }) {
-      Text(title)
+      Text($$.title)
         .fontSize(14)
         .fontColor($r('sys.color.font_primary'))
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      this.StatusCapsule(label, state)
+      this.StatusCapsule({ label: $$.label, state: $$.state })
     }
     .width('100%')
     .height(42)
@@ -410,25 +421,25 @@ export struct DeviceDetailSheet {
 
         Column({ space: 0 }) {
           if (this.showSunshine) {
-            this.ServiceStatusRow('Sunshine', this.sunshineLabel(), this.sunshineStatusState())
+            this.ServiceStatusRow({ title: 'Sunshine', label: this.sunshineLabel(), state: this.sunshineStatusState() })
             Divider()
               .color($r('sys.color.comp_divider'))
               .margin({ left: 14, right: 14 })
           }
-          this.ServiceStatusRow($r('app.string.media_services_label'), this.mediaLabel(),
-            this.mediaStatusState())
+          this.ServiceStatusRow({ title: $r('app.string.media_services_label'), label: this.mediaLabel(),
+            state: this.mediaStatusState() })
           Divider()
             .color($r('sys.color.comp_divider'))
             .margin({ left: 14, right: 14 })
-          this.ServiceStatusRow('Taildrop', this.taildropLabel(), this.taildropStatusState())
+          this.ServiceStatusRow({ title: 'Taildrop', label: this.taildropLabel(), state: this.taildropStatusState() })
           Divider()
             .color($r('sys.color.comp_divider'))
             .margin({ left: 14, right: 14 })
-          this.ServiceStatusRow('LocalSend', this.localSendLabel(), this.localSendStatusState())
+          this.ServiceStatusRow({ title: 'LocalSend', label: this.localSendLabel(), state: this.localSendStatusState() })
           Divider()
             .color($r('sys.color.comp_divider'))
             .margin({ left: 14, right: 14 })
-          this.ServiceStatusRow('Taildrive', this.taildriveLabel(), this.taildriveStatusState())
+          this.ServiceStatusRow({ title: 'Taildrive', label: this.taildriveLabel(), state: this.taildriveStatusState() })
 
           if (this.hasServiceActions()) {
             Divider()

@@ -35,17 +35,16 @@ const (
 	meshArcDeviceEndpointHTTP    = "http://127.0.0.1:53317/api/mesharc/devices"
 	meshArcDeviceSyncPeriod      = 30 * time.Second
 	meshArcDeviceTimeout         = 3 * time.Second
+	meshArcDeviceRefreshTimeout  = 15 * time.Second
 	meshArcLocalSendPort         = 53317
 	meshArcLocalSendProtocol     = "https"
 	meshArcLocalSendVersion      = "2.1"
 	meshArcLocalSendRegisterPath = "/api/localsend/v2/register"
-	// LocalSend is probed through the Tailscale path. A DERP relay plus the
-	// TLS/mTLS handshake can exceed 1.2s even when the receiver is healthy.
-	// LocalSend receivers answer /register immediately on the Tailscale path.
-	// Keep HTTPS and the legacy HTTP fallback bounded so an explicit refresh can
-	// take its optional second stability sample without occupying the UI for ten
-	// seconds.
-	meshArcLocalSendProbeTimeout = 1500 * time.Millisecond
+	// LocalSend is probed through Tailscale. Over DERP, the TCP, TLS/mTLS and
+	// HTTP round trips can exceed 1.5s even when the receiver
+	// is healthy. Bound each protocol attempt and the whole manual refresh
+	// separately; a LAN-sized deadline makes cellular DERP peers look absent.
+	meshArcLocalSendProbeTimeout = 5 * time.Second
 	meshArcLocalSendProbeWorkers = 8
 	meshArcLocalSendDeviceType   = "mobile"
 )
@@ -290,9 +289,17 @@ func (b *backendController) meshArcDeviceSyncLoop(
 func (b *backendController) syncMeshArcDevicesOnce(
 	ctx context.Context, server *tsnet.Server, generation uint64, client *local.Client,
 ) {
-	b.meshArcDeviceRefreshMu.Lock()
+	// A UI refresh can arrive during the periodic sweep. Waiting for its lock
+	// must respect the same deadline as the network requests.
+	for !b.meshArcDeviceRefreshMu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 	defer b.meshArcDeviceRefreshMu.Unlock()
-	if !b.isCurrentBackend(server, generation) {
+	if ctx.Err() != nil || !b.isCurrentBackend(server, generation) {
 		return
 	}
 	statusContext, cancel := context.WithTimeout(ctx, meshArcDeviceTimeout)
@@ -314,6 +321,11 @@ func (b *backendController) syncMeshArcDevicesOnce(
 	// Tailscale's peer list is only the candidate set. A peer is added to the
 	// MeshArc array after its LocalSend /register endpoint answers successfully.
 	devices, localSendStatuses := probeMeshArcDeviceItems(ctx, server, status)
+	// An exhausted caller budget is not evidence that any receiver stopped.
+	// In particular, never count a cancelled second sample as another failure.
+	if ctx.Err() != nil {
+		return
+	}
 	if !b.updateMeshArcDeviceStatuses(server, generation, localSendStatuses) {
 		return
 	}
@@ -330,18 +342,24 @@ func (b *backendController) refreshMeshArcDevices() string {
 	if server == nil || client == nil {
 		return "FAILED | LocalSend refresh | backend not ready"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), meshArcDeviceRefreshTimeout)
 	defer cancel()
 	b.syncMeshArcDevicesOnce(ctx, server, generation, client)
 	// A receiver that was available may occasionally lose one mTLS/register
 	// request while the service is still running. The first miss is held by
 	// updateMeshArcDeviceStatuses; an explicit user refresh immediately takes a
-	// second sample so a stopped receiver still becomes unavailable in one tap.
-	if b.hasPendingMeshArcDeviceFailure(server, generation) && ctx.Err() == nil {
+	// second sample when enough budget remains. A stopped receiver that rejects
+	// connections promptly can still become unavailable in one tap.
+	deadline, _ := ctx.Deadline()
+	if b.hasPendingMeshArcDeviceFailure(server, generation) &&
+		time.Until(deadline) >= 2*meshArcLocalSendProbeTimeout {
 		b.syncMeshArcDevicesOnce(ctx, server, generation, client)
 	}
 	if !b.isCurrentBackend(server, generation) {
 		return "FAILED | LocalSend refresh | backend changed"
+	}
+	if ctx.Err() != nil {
+		return "FAILED | LocalSend refresh | timeout"
 	}
 	return "OK | LocalSend refresh"
 }

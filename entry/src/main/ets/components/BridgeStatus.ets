@@ -147,6 +147,9 @@ const FAST_RECONNECT_TTL_MS: number = 15000;
 const FAST_REFRESH_INTERVAL_MS: number = 2000;
 const OFFLINE_PEER_STATUS_REFRESH_INTERVAL_MS: number = 10000;
 const NORMAL_SERVICE_REFRESH_INTERVAL_MS: number = 30000;
+// Native refresh has a 15-second budget; allow its following peer snapshot
+// to finish before a later UI refresh can replace the command/response files.
+const LOCAL_SEND_REFRESH_TIMEOUT_MS: number = 25000;
 const STATUS_CROSS_FADE_MS: number = 180;
 const LOCAL_SEND_APP_TARGETS: LocalSendAppTarget[] = [
   {
@@ -4160,7 +4163,7 @@ export struct BridgeStatus {
     this.vpnCommandGateway.writeCommandFile(context.filesDir, LOCAL_SEND_REFRESH_REQUEST_FILE_NAME,
       JSON.stringify({ requestId: requestId }));
     const startedAt: number = Date.now();
-    while (Date.now() - startedAt < 6500 && this.appShellReady && this.isConnected()) {
+    while (Date.now() - startedAt < LOCAL_SEND_REFRESH_TIMEOUT_MS && this.appShellReady && this.isConnected()) {
       await new Promise<void>((resolve: () => void) => setTimeout(resolve, 150));
       try {
         if (!fileIo.accessSync(responsePath)) {
@@ -4532,7 +4535,15 @@ export struct BridgeStatus {
   }
 
   private localSendAvailableForPeer(peer: PeerSummary): boolean {
-    return this.isConnected() && this.peerEffectivelyOnline(peer) && peer.localSend?.state === 'available';
+    const current: PeerSummary | undefined = this.peers.find((item: PeerSummary) => item.key === peer.key);
+    return this.isConnected() && current !== undefined && this.peerEffectivelyOnline(current) &&
+      current.localSend?.state === 'available';
+  }
+
+  private localSendStatusForPeer(peerKey: string): LocalSendStatus | undefined {
+    // A stable ForEach key keeps the detail sheet and its original peer
+    // closure mounted. Read the observed directory to receive later probes.
+    return this.peers.find((peer: PeerSummary) => peer.key === peerKey)?.localSend;
   }
 
   private deviceDetailRenderKey(peer: PeerSummary): string {
@@ -9952,7 +9963,7 @@ export struct BridgeStatus {
       ForEach(this.selectedPeerDetails,
         (peer: PeerSummary) => {
           DeviceDetailSheet({
-            online: this.peerEffectivelyOnline(peer),
+            online: this.peers.some((current: PeerSummary) => current.key === peer.key && current.online),
             meshConnected: this.isConnected(),
             path: this.streamingState(peer.key).path,
             tailscaleAddress: this.primaryTailscaleAddress(peer.addresses),
@@ -9966,7 +9977,7 @@ export struct BridgeStatus {
             mediaServiceNames: this.mediaServiceNames(peer.key),
             mediaLaunching: this.mediaState(peer.key).launching,
             serviceRefreshVisible: this.deviceDetailServiceRefreshInFlight,
-            localSendState: peer.localSend?.state ?? 'unknown',
+            localSendState: this.localSendStatusForPeer(peer.key)?.state ?? 'unknown',
             localSendRefreshing: this.transferProtocolRefreshing,
             localSendAvailable: this.localSendAvailableForPeer(peer),
             taildropAvailable: this.taildropTargetAvailableForPeer(peer),
